@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: transaction_event_gateway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d transaction_event_gateway"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      PORT: "3000"
+      DATABASE_URL: postgres://app:app@localhost:5432/transaction_event_gateway
+      REDIS_URL: redis://localhost:6379
+      WEBHOOK_SECRET: test-webhook-secret-value
+      WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: "300"
+      OUTBOX_DISPATCH_ENABLED: "false"
+      OUTBOX_DISPATCH_INTERVAL_MS: "1000"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: E2E tests
+        run: npm run test:e2e
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify schema drift
+        run: DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run typeorm -- schema:log
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
+      - name: Forbidden wording scan
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          blocked_terms=(
+            "inter""view"
+            "port""folio"
+            "pet ""project"
+            "tuto""rial"
+            "Async""Assassin"
+            "com""pany"
+          )
+          pattern="$(IFS='|'; echo "${blocked_terms[*]}")"
+          targets=(
+            README.md
+            docs
+            src
+            test
+            package.json
+            Dockerfile
+            docker-compose.yml
+            .env.example
+          )
+
+          if command -v rg >/dev/null 2>&1; then
+            if rg -n -i --glob '!node_modules/**' --glob '!dist/**' --glob '!coverage/**' "$pattern" "${targets[@]}"; then
+              echo "Forbidden wording found."
+              exit 1
+            fi
+          else
+            if grep -RInEI --binary-files=without-match "$pattern" "${targets[@]}"; then
+              echo "Forbidden wording found."
+              exit 1
+            fi
+          fi
