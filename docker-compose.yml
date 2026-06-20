@@ -1,0 +1,62 @@
+services:
+  api:
+    build:
+      context: .
+    image: transaction-event-gateway:local
+    command: ["npm", "run", "start"]
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgres://app:app@postgres:5432/transaction_event_gateway
+      REDIS_URL: redis://redis:6379
+      WEBHOOK_SECRET: local-development-placeholder-secret
+      WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: 300
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+    image: transaction-event-gateway:local
+    command: ["npm", "run", "start:worker"]
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgres://app:app@postgres:5432/transaction_event_gateway
+      REDIS_URL: redis://redis:6379
+      WEBHOOK_SECRET: local-development-placeholder-secret
+      WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: 300
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: transaction_event_gateway
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d transaction_event_gateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
