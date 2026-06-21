@@ -42,6 +42,111 @@ variable "container_image" {
   }
 }
 
+variable "api_task_cpu" {
+  description = "Fargate CPU units for the API task definition."
+  type        = number
+  default     = 512
+
+  validation {
+    condition     = contains([256, 512, 1024, 2048, 4096, 8192, 16384], var.api_task_cpu)
+    error_message = "api_task_cpu must be a valid Fargate CPU value."
+  }
+}
+
+variable "api_task_memory" {
+  description = "Fargate memory in MiB for the API task definition."
+  type        = number
+  default     = 1024
+
+  validation {
+    condition     = var.api_task_memory >= 512 && var.api_task_memory == floor(var.api_task_memory)
+    error_message = "api_task_memory must be an integer number of MiB and at least 512."
+  }
+}
+
+variable "worker_task_cpu" {
+  description = "Fargate CPU units for the worker task definition."
+  type        = number
+  default     = 512
+
+  validation {
+    condition     = contains([256, 512, 1024, 2048, 4096, 8192, 16384], var.worker_task_cpu)
+    error_message = "worker_task_cpu must be a valid Fargate CPU value."
+  }
+}
+
+variable "worker_task_memory" {
+  description = "Fargate memory in MiB for the worker task definition."
+  type        = number
+  default     = 1024
+
+  validation {
+    condition     = var.worker_task_memory >= 512 && var.worker_task_memory == floor(var.worker_task_memory)
+    error_message = "worker_task_memory must be an integer number of MiB and at least 512."
+  }
+}
+
+variable "migration_task_cpu" {
+  description = "Fargate CPU units for the one-off migration task definition."
+  type        = number
+  default     = 256
+
+  validation {
+    condition     = contains([256, 512, 1024, 2048, 4096, 8192, 16384], var.migration_task_cpu)
+    error_message = "migration_task_cpu must be a valid Fargate CPU value."
+  }
+}
+
+variable "migration_task_memory" {
+  description = "Fargate memory in MiB for the one-off migration task definition."
+  type        = number
+  default     = 512
+
+  validation {
+    condition     = var.migration_task_memory >= 512 && var.migration_task_memory == floor(var.migration_task_memory)
+    error_message = "migration_task_memory must be an integer number of MiB and at least 512."
+  }
+}
+
+variable "ecs_log_retention_days" {
+  description = "CloudWatch Logs retention in days for ECS API, worker, and migration task log groups."
+  type        = number
+  default     = 30
+
+  validation {
+    condition = contains([
+      1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180,
+      365, 400, 545, 731, 1096, 1827, 2192, 2557, 3653
+    ], var.ecs_log_retention_days)
+    error_message = "ecs_log_retention_days must be a CloudWatch Logs supported retention value."
+  }
+}
+
+variable "app_environment_variables" {
+  description = "Non-secret environment variables injected into ECS task definitions. Do not include database, Redis, webhook, or AWS credential secrets."
+  type        = map(string)
+  default = {
+    NODE_ENV = "production"
+    PORT     = "3000"
+  }
+
+  validation {
+    condition = alltrue([
+      for name in keys(var.app_environment_variables) :
+      can(regex("^[A-Z][A-Z0-9_]*$", name)) &&
+      !contains([
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "DATABASE_URL",
+        "REDIS_URL",
+        "WEBHOOK_SECRET",
+      ], name)
+    ])
+    error_message = "app_environment_variables keys must be uppercase env names and must not include secrets or AWS credentials."
+  }
+}
+
 variable "create_vpc" {
   description = "Future switch for a managed VPC path. The current scaffold does not create VPC resources."
   type        = bool

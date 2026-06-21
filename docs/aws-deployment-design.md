@@ -6,13 +6,13 @@
 | --- | --- |
 | Status | Design with incremental Terraform scaffold |
 | Scope | MVP AWS deployment architecture |
-| Last updated | 2026-06-21 |
+| Last updated | 2026-06-22 |
 
 ## Scope
 
 This document describes a recommended MVP AWS deployment shape for `transaction-event-gateway`. It is a handoff document for incremental infrastructure phases.
 
-The current Terraform scaffold implements ECR, security groups, the MVP HTTP ALB path, private RDS PostgreSQL, and private ElastiCache Redis. It does not change application code, change Docker behavior, add deployment workflows, or deploy anything.
+The current Terraform scaffold implements ECR, security groups, the MVP HTTP ALB path, private RDS PostgreSQL, private ElastiCache Redis, ECS Fargate task definitions, task log groups, and a minimal ECS task execution role. It does not define ECS services, autoscaling, an ECS cluster, secrets wiring, deployment workflows, or live deployment behavior.
 
 ## Recommended MVP Architecture
 
@@ -139,7 +139,8 @@ Security group model:
 IAM model:
 
 - ECS task execution role can pull from ECR, write CloudWatch logs, and fetch configured secrets.
-- Application task role should be minimal. At MVP, it may only need read access to the specific secrets or parameters if they are loaded at runtime by ECS.
+- The current Terraform scaffold includes execution permissions for ECR image pulls and task logs only; secret-fetch permissions are deferred until secret ARNs or parameter names exist.
+- Application task role should be minimal. At MVP, it may only need read access to the specific secrets or parameters if the application loads them at runtime instead of ECS injecting them.
 - CI/CD role can push to the specific ECR repository and update the specific ECS services, but should not have broad administrator access.
 
 ## Migration and Release Flow
@@ -214,6 +215,8 @@ Gaps to close after MVP:
 ## Operational Risks and Gaps
 
 - The current image default starts the API process; ECS worker and migration tasks need explicit command overrides.
+- The current Terraform task definitions intentionally omit `DATABASE_URL`, `REDIS_URL`, and `WEBHOOK_SECRET` until a dedicated secrets phase wires approved secret sources.
+- The migration task command matches the current package script, but the production image migration runtime should be reviewed before first ECS execution because the image currently copies compiled `dist` output and production dependencies only.
 - `LOG_LEVEL` is a deployment design item, but current runtime support should be verified before using it as an operational control.
 - Worker scaling should be conservative until production-like queue behavior and database lock contention are measured.
 - ALB readiness depends on both PostgreSQL and Redis. This is strict and production-safe, but it means Redis incidents can remove API tasks from rotation even though some durable writes may still be possible.
@@ -230,16 +233,16 @@ Gaps to close after MVP:
 - Sophisticated autoscaling policies.
 - Custom admin panel or manual retry UI.
 - Blockchain provider integration beyond the current signed webhook contract.
-- ECS, IAM app roles, CloudWatch resources, and deployment workflow implementation in the current Terraform scaffold.
+- ECS services, autoscaling, app task roles, secrets wiring, and deployment workflow implementation in the current Terraform scaffold.
 - AWS credentials, secrets, or live deployment changes.
 
 ## Handoff Checklist for Infrastructure Phase
 
-- Review the current Terraform scaffold for ECR, security groups, ALB, private RDS PostgreSQL, and private ElastiCache Redis.
-- Define ECS cluster, API service, worker service, and migration task definition.
+- Review the current Terraform scaffold for ECR, security groups, ALB, private RDS PostgreSQL, private ElastiCache Redis, ECS task definitions, task log groups, and ECS task execution IAM.
+- Define ECS cluster, API service, worker service, and the one-off migration task run path.
 - Review ElastiCache Redis failover, Multi-AZ, TLS client settings, snapshots, and node sizing before production use.
 - Configure TLS certificate, HTTPS listener, and production ALB hardening.
-- Define least-privilege IAM roles.
+- Add least-privilege app task role permissions only when secrets or runtime AWS API access are wired.
 - Store required environment values in Secrets Manager or SSM Parameter Store, including wiring the RDS-managed PostgreSQL secret into `DATABASE_URL`.
 - Add CI/CD only after design review, with migration and rollback gates.
 - Document production migration review expectations before first deployment.

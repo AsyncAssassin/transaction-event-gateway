@@ -21,6 +21,13 @@ private_subnet_ids = [
 app_port                         = 3000
 alb_port                         = 80
 alb_enable_deletion_protection   = false
+api_task_cpu                     = 512
+api_task_memory                  = 1024
+worker_task_cpu                  = 512
+worker_task_memory               = 1024
+migration_task_cpu               = 256
+migration_task_memory            = 512
+ecs_log_retention_days           = 30
 postgres_port                    = 5432
 postgres_engine_version          = "16.6"
 postgres_instance_class          = "db.t4g.micro"
@@ -47,6 +54,11 @@ redis_apply_immediately          = false
 allowed_http_cidrs = [
   "0.0.0.0/0",
 ]
+
+app_environment_variables = {
+  NODE_ENV = "production"
+  PORT     = "3000"
+}
 
 tags = {
   Owner = "example"

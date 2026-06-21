@@ -108,3 +108,23 @@ output "alb_listener_arn" {
   description = "ARN of the MVP HTTP listener for the future API ALB."
   value       = aws_lb_listener.http.arn
 }
+
+output "api_task_definition_arn" {
+  description = "ARN of the ECS Fargate API task definition."
+  value       = aws_ecs_task_definition.api.arn
+}
+
+output "worker_task_definition_arn" {
+  description = "ARN of the ECS Fargate worker task definition."
+  value       = aws_ecs_task_definition.worker.arn
+}
+
+output "migration_task_definition_arn" {
+  description = "ARN of the ECS Fargate one-off migration task definition."
+  value       = aws_ecs_task_definition.migration.arn
+}
+
+output "execution_role_arn" {
+  description = "ARN of the ECS task execution role used for image pulls and task logs."
+  value       = aws_iam_role.ecs_task_execution.arn
+}

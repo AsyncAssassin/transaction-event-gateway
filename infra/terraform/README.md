@@ -7,9 +7,11 @@ deployment of `transaction-event-gateway`. It currently defines the ECR
 repository needed to store application images, the minimal security groups for
 ALB, future ECS tasks, RDS PostgreSQL, and ElastiCache Redis resources, the MVP
 HTTP Application Load Balancer path for the future API service, a private RDS
-PostgreSQL instance, and a private ElastiCache Redis replication group. It is
-not ready for `apply` and does not require AWS credentials for formatting or
-validation.
+PostgreSQL instance, a private ElastiCache Redis replication group, and ECS
+Fargate task definitions for the API, worker, and one-off migration runtime
+units. It also includes the minimal ECS task execution role and CloudWatch log
+groups needed by those task definitions. It is not ready for `apply` and does
+not require AWS credentials for formatting or validation.
 
 The current Terraform files are intended to support structure review,
 formatting, and validation only. They should not be used to create, update, or
@@ -32,8 +34,10 @@ delete live infrastructure in this phase without explicit approval.
   future API service.
 - `rds.tf`: private DB subnet group and RDS PostgreSQL instance.
 - `redis.tf`: private ElastiCache Redis subnet group and replication group.
+- `ecs-tasks.tf`: ECS Fargate task definitions for API, worker, and migration
+  tasks, plus minimal task execution IAM and task log groups.
 - `outputs.tf`: scaffold outputs plus ECR repository, security group IDs, and
-  ALB, RDS, and Redis values.
+  ALB, RDS, Redis, ECS task definition, and execution role values.
 - `example.tfvars`: dummy values for local review. Do not put real secrets here.
 
 ## Planned AWS resource phases
@@ -42,14 +46,14 @@ The resource implementation should continue in small phases after review:
 
 1. State backend design and environment layout.
 2. Network path selection: existing VPC inputs first, optional managed VPC later.
-3. IAM roles and CloudWatch log groups.
-4. ECS cluster, API task definition, and API service.
-5. HTTPS listener, ACM certificate, and optional production ALB hardening.
-6. ECS worker task definition and worker service with no inbound traffic.
-7. One-off ECS migration task definition.
-8. Secrets Manager or SSM Parameter Store wiring for runtime values, including
+3. ECS cluster, API service, worker service, and the one-off migration task run
+   path.
+4. HTTPS listener, ACM certificate, and optional production ALB hardening.
+5. Secrets Manager or SSM Parameter Store wiring for runtime values, including
    wiring the RDS-managed PostgreSQL secret into `DATABASE_URL`.
-9. Release workflow design after explicit approval.
+6. Application task role permissions only if a later phase needs runtime AWS
+   API access beyond ECS-managed image pulls and logs.
+7. Release workflow design after explicit approval.
 
 ## Variables
 
@@ -59,6 +63,14 @@ The resource implementation should continue in small phases after review:
 | `project_name` | Short ECR-safe name used in future resource names and tags. Lowercase letters and digits with single hyphens between segments. |
 | `environment` | Short ECR-safe environment name such as `dev`, `stage`, or `staging-1`. Lowercase letters and digits with single hyphens between segments. |
 | `container_image` | Future ECS image reference. Use an immutable tag or digest later. |
+| `api_task_cpu` | Fargate CPU units for the API task definition. |
+| `api_task_memory` | Fargate memory in MiB for the API task definition. |
+| `worker_task_cpu` | Fargate CPU units for the worker task definition. |
+| `worker_task_memory` | Fargate memory in MiB for the worker task definition. |
+| `migration_task_cpu` | Fargate CPU units for the one-off migration task definition. |
+| `migration_task_memory` | Fargate memory in MiB for the one-off migration task definition. |
+| `ecs_log_retention_days` | CloudWatch Logs retention for API, worker, and migration task log groups. |
+| `app_environment_variables` | Non-secret environment variables injected into all ECS task definitions. Defaults to `NODE_ENV=production` and `PORT=3000`; do not place secrets here. |
 | `create_vpc` | Future switch for managed VPC creation. Current scaffold does not create VPC resources. |
 | `vpc_id` | Existing VPC ID for security groups. |
 | `public_subnet_ids` | Public subnets intended for a future ALB. |
@@ -93,8 +105,9 @@ The resource implementation should continue in small phases after review:
 
 ## Current resource scope
 
-This phase defines only ECR, security group, ALB, RDS PostgreSQL, and
-ElastiCache Redis resources:
+This phase defines only ECR, security group, ALB, RDS PostgreSQL, ElastiCache
+Redis, ECS task definition, minimal ECS task execution IAM, and ECS task log
+group resources:
 
 - `aws_ecr_repository.app`: application image repository named from
   `local.name_prefix`, with immutable image tags, scan on push, and AES256
@@ -142,6 +155,28 @@ ElastiCache Redis resources:
 - `aws_elasticache_replication_group.redis`: private Redis replication group
   using `aws_security_group.redis.id`, at-rest encryption, automatic snapshots,
   and configurable failover, Multi-AZ, node sizing, and transit encryption.
+- `aws_cloudwatch_log_group.api`: log group for future API task logs.
+- `aws_cloudwatch_log_group.worker`: log group for future worker task logs.
+- `aws_cloudwatch_log_group.migration`: log group for future one-off migration
+  task logs.
+- `aws_iam_role.ecs_task_execution`: ECS task execution role trusted only by
+  `ecs-tasks.amazonaws.com`.
+- `aws_iam_role_policy.ecs_task_execution`: minimal execution permissions for
+  pulling from the app ECR repository, authorizing ECR image pulls, and writing
+  streams/events to the task log groups.
+- `aws_ecs_task_definition.api`: Fargate API task definition using
+  `var.container_image`, `node dist/main.js`, the configured `app_port`, and
+  the API log group.
+- `aws_ecs_task_definition.worker`: Fargate worker task definition using
+  `var.container_image`, `node dist/worker.js`, and the worker log group.
+- `aws_ecs_task_definition.migration`: Fargate one-off migration task
+  definition using `var.container_image`, `npm run migration:run`, and the
+  migration log group.
+
+The migration task definition follows the existing package script. Before a
+real one-off ECS migration run is enabled, a later Docker or migration-runtime
+phase must verify that the production image includes runnable migration
+artifacts and dependencies.
 
 The target group health check uses `/health/ready`. That endpoint checks
 required app configuration, PostgreSQL, and Redis readiness. This intentionally
@@ -152,9 +187,9 @@ though some durable PostgreSQL-backed writes may still work. See
 
 The RDS instance sets `publicly_accessible = false` and uses the private DB
 subnet group. It is reachable only through the existing RDS security group rule
-that allows PostgreSQL from the ECS tasks security group. No ECS task currently
-receives `DATABASE_URL`; a later ECS/secrets phase must read the RDS-managed
-secret and assemble the runtime connection string.
+that allows PostgreSQL from the ECS tasks security group. The ECS task
+definitions do not receive `DATABASE_URL`; a later ECS/secrets phase must read
+the RDS-managed secret and assemble the runtime connection string.
 
 RDS uses `manage_master_user_password = true`, so Terraform does not take or
 store a plaintext database password. The AWS-managed master user secret ARN is
@@ -172,12 +207,24 @@ accepts only `redis://` URLs. A production move to Redis TLS should first update
 client configuration and runtime validation for `rediss://`, then enable
 `redis_transit_encryption_enabled` during a reviewed infrastructure change.
 
-No ECS task currently receives `REDIS_URL`; a later ECS/secrets phase must build
-the runtime connection string from the Redis primary endpoint and port.
+The ECS task definitions do not receive `REDIS_URL`; a later ECS/secrets phase
+must build the runtime connection string from the Redis primary endpoint and
+port.
 
-No VPC, subnet, route table, NAT gateway, ECS service, ECS task definition, IAM,
-standalone Secrets Manager resource, CloudWatch, deployment workflow, registry
-login, or image push behavior is implemented in this phase.
+The ECS task definitions intentionally include only non-secret environment
+variables through `app_environment_variables`. Do not put `DATABASE_URL`,
+`REDIS_URL`, `WEBHOOK_SECRET`, AWS credentials, account IDs, real ARNs, or other
+secret values in Terraform or tfvars files. Because secrets are not wired yet,
+the task definitions are registration scaffolding, not a complete runnable
+deployment.
+
+No application task role is defined in this phase because the application does
+not receive runtime AWS API permissions yet. Add an app task role only when a
+later secrets or AWS-integration phase needs scoped runtime permissions.
+
+No VPC, subnet, route table, NAT gateway, ECS cluster, ECS service, autoscaling,
+standalone Secrets Manager resource, deployment workflow, registry login, or
+image push behavior is implemented in this phase.
 
 Existing VPC and subnet IDs are variables only. This scaffold does not use
 Terraform data sources or modules.
