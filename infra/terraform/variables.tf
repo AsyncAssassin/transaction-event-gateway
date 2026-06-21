@@ -138,6 +138,101 @@ variable "postgres_port" {
   }
 }
 
+variable "postgres_engine_version" {
+  description = "PostgreSQL engine version for the RDS instance."
+  type        = string
+  default     = "16.6"
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?$", var.postgres_engine_version))
+    error_message = "postgres_engine_version must be a PostgreSQL major or major.minor version, for example 16 or 16.6."
+  }
+}
+
+variable "postgres_instance_class" {
+  description = "RDS instance class for PostgreSQL."
+  type        = string
+  default     = "db.t4g.micro"
+
+  validation {
+    condition     = can(regex("^db\\.[a-z0-9][a-z0-9.-]*$", var.postgres_instance_class))
+    error_message = "postgres_instance_class must look like an RDS instance class, for example db.t4g.micro."
+  }
+}
+
+variable "postgres_allocated_storage" {
+  description = "Initial PostgreSQL allocated storage in GiB."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.postgres_allocated_storage >= 20 && var.postgres_allocated_storage == floor(var.postgres_allocated_storage)
+    error_message = "postgres_allocated_storage must be an integer of at least 20 GiB."
+  }
+}
+
+variable "postgres_max_allocated_storage" {
+  description = "Maximum PostgreSQL autoscaled storage in GiB. Keep greater than or equal to postgres_allocated_storage."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.postgres_max_allocated_storage >= 20 && var.postgres_max_allocated_storage == floor(var.postgres_max_allocated_storage)
+    error_message = "postgres_max_allocated_storage must be an integer of at least 20 GiB."
+  }
+}
+
+variable "postgres_db_name" {
+  description = "Initial PostgreSQL database name."
+  type        = string
+  default     = "transaction_event_gateway"
+
+  validation {
+    condition     = length(var.postgres_db_name) >= 1 && length(var.postgres_db_name) <= 63 && can(regex("^[A-Za-z][A-Za-z0-9_]*$", var.postgres_db_name))
+    error_message = "postgres_db_name must be 1 to 63 characters, start with a letter, and contain only letters, digits, and underscores."
+  }
+}
+
+variable "postgres_username" {
+  description = "PostgreSQL master username. The password is managed by RDS and is not stored in Terraform files."
+  type        = string
+  default     = "app"
+
+  validation {
+    condition     = length(var.postgres_username) >= 1 && length(var.postgres_username) <= 63 && lower(var.postgres_username) != "postgres" && can(regex("^[A-Za-z][A-Za-z0-9_]*$", var.postgres_username))
+    error_message = "postgres_username must be 1 to 63 characters, start with a letter, contain only letters, digits, and underscores, and must not be postgres."
+  }
+}
+
+variable "postgres_backup_retention_days" {
+  description = "PostgreSQL automated backup retention period in days."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.postgres_backup_retention_days >= 0 && var.postgres_backup_retention_days <= 35 && var.postgres_backup_retention_days == floor(var.postgres_backup_retention_days)
+    error_message = "postgres_backup_retention_days must be an integer between 0 and 35."
+  }
+}
+
+variable "postgres_multi_az" {
+  description = "Whether to deploy PostgreSQL as a Multi-AZ RDS instance."
+  type        = bool
+  default     = false
+}
+
+variable "postgres_deletion_protection" {
+  description = "Whether to enable deletion protection on the PostgreSQL RDS instance. Defaults to false for the no-apply MVP scaffold."
+  type        = bool
+  default     = false
+}
+
+variable "postgres_skip_final_snapshot" {
+  description = "Whether to skip the final snapshot when destroying PostgreSQL. Defaults to true for the no-apply MVP scaffold; production should usually set this to false."
+  type        = bool
+  default     = true
+}
+
 variable "redis_port" {
   description = "Redis port for the future ElastiCache cluster."
   type        = number

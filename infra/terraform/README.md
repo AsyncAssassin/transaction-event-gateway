@@ -4,11 +4,11 @@
 
 This directory is an incremental Terraform scaffold for a future AWS MVP
 deployment of `transaction-event-gateway`. It currently defines the ECR
-repository needed to store application images and the minimal security groups
-for future ALB, ECS task, RDS PostgreSQL, and ElastiCache Redis resources, plus
-the MVP HTTP Application Load Balancer path for the future API service. It is
-not ready for `apply` and does not require AWS credentials for formatting or
-validation.
+repository needed to store application images, the minimal security groups for
+ALB, future ECS tasks, RDS PostgreSQL, and future ElastiCache Redis resources,
+the MVP HTTP Application Load Balancer path for the future API service, and a
+private RDS PostgreSQL instance. It is not ready for `apply` and does not
+require AWS credentials for formatting or validation.
 
 The current Terraform files are intended to support structure review,
 formatting, and validation only. They should not be used to create, update, or
@@ -29,8 +29,9 @@ delete live infrastructure in this phase without explicit approval.
   ECS tasks, RDS PostgreSQL, and Redis network path.
 - `alb.tf`: internet-facing ALB, HTTP target group, and HTTP listener for the
   future API service.
+- `rds.tf`: private DB subnet group and RDS PostgreSQL instance.
 - `outputs.tf`: scaffold outputs plus ECR repository, security group IDs, and
-  ALB values.
+  ALB and RDS values.
 - `example.tfvars`: dummy values for local review. Do not put real secrets here.
 
 ## Planned AWS resource phases
@@ -44,8 +45,9 @@ The resource implementation should continue in small phases after review:
 5. HTTPS listener, ACM certificate, and optional production ALB hardening.
 6. ECS worker task definition and worker service with no inbound traffic.
 7. One-off ECS migration task definition.
-8. RDS PostgreSQL and ElastiCache Redis in private networking.
-9. Secrets Manager or SSM Parameter Store wiring for runtime values.
+8. ElastiCache Redis in private networking.
+9. Secrets Manager or SSM Parameter Store wiring for runtime values, including
+   wiring the RDS-managed PostgreSQL secret into `DATABASE_URL`.
 10. Release workflow design after explicit approval.
 
 ## Variables
@@ -65,13 +67,23 @@ The resource implementation should continue in small phases after review:
 | `alb_port` | Future public ALB HTTP port. Defaults to `80`. |
 | `alb_enable_deletion_protection` | ALB deletion protection switch. Defaults to `false` for this no-apply MVP scaffold. |
 | `postgres_port` | PostgreSQL port for future RDS access. Defaults to `5432`. |
+| `postgres_engine_version` | PostgreSQL engine version. Defaults to `16.6`. |
+| `postgres_instance_class` | RDS PostgreSQL instance class. Defaults to `db.t4g.micro`. |
+| `postgres_allocated_storage` | Initial PostgreSQL storage in GiB. Defaults to `20`. |
+| `postgres_max_allocated_storage` | Maximum autoscaled PostgreSQL storage in GiB. Defaults to `100`. |
+| `postgres_db_name` | Initial PostgreSQL database name. Defaults to `transaction_event_gateway`. |
+| `postgres_username` | PostgreSQL master username. The password is managed by RDS and is not stored in Terraform files. |
+| `postgres_backup_retention_days` | Automated backup retention in days. Defaults to `7`. |
+| `postgres_multi_az` | Multi-AZ switch for PostgreSQL. Defaults to `false` for this no-apply MVP scaffold. |
+| `postgres_deletion_protection` | RDS deletion protection switch. Defaults to `false` for this no-apply MVP scaffold. |
+| `postgres_skip_final_snapshot` | RDS final snapshot skip switch. Defaults to `true` for this no-apply MVP scaffold; production should usually set this to `false`. |
 | `redis_port` | Redis port for future ElastiCache access. Defaults to `6379`. |
 | `health_check_path` | Future ALB health check path. Defaults to `/health/ready`. |
 | `tags` | Additional non-secret tags for future AWS resources. |
 
 ## Current resource scope
 
-This phase defines only ECR, security group, and ALB resources:
+This phase defines only ECR, security group, ALB, and RDS PostgreSQL resources:
 
 - `aws_ecr_repository.app`: application image repository named from
   `local.name_prefix`, with immutable image tags, scan on push, and AES256
@@ -109,6 +121,11 @@ This phase defines only ECR, security group, and ALB resources:
 - `aws_lb_listener.http`: MVP HTTP listener on `alb_port` that forwards to the
   future API target group. Until a future ECS service registers targets, the
   listener can return no-target responses from the empty target group.
+- `aws_db_subnet_group.postgres`: DB subnet group built only from
+  `private_subnet_ids`.
+- `aws_db_instance.postgres`: private RDS PostgreSQL instance using
+  `aws_security_group.rds.id`, encrypted `gp3` storage, automated backups, and
+  an AWS-managed master user password.
 
 The target group health check uses `/health/ready`. That endpoint checks
 required app configuration, PostgreSQL, and Redis readiness. This intentionally
@@ -117,9 +134,20 @@ are unhealthy, but it also means Redis incidents can remove API tasks even
 though some durable PostgreSQL-backed writes may still work. See
 `docs/aws-deployment-design.md` for the deployment trade-off.
 
-No VPC, subnet, route table, NAT gateway, ECS service, ECS task definition, RDS
-instance, ElastiCache cluster, IAM, secrets, CloudWatch, deployment workflow,
-registry login, or image push behavior is implemented in this phase.
+The RDS instance sets `publicly_accessible = false` and uses the private DB
+subnet group. It is reachable only through the existing RDS security group rule
+that allows PostgreSQL from the ECS tasks security group. No ECS task currently
+receives `DATABASE_URL`; a later ECS/secrets phase must read the RDS-managed
+secret and assemble the runtime connection string.
+
+RDS uses `manage_master_user_password = true`, so Terraform does not take or
+store a plaintext database password. The AWS-managed master user secret ARN is
+exposed as a sensitive output for later wiring.
+
+No VPC, subnet, route table, NAT gateway, ECS service, ECS task definition,
+ElastiCache cluster, IAM, standalone Secrets Manager resource, CloudWatch,
+deployment workflow, registry login, or image push behavior is implemented in
+this phase.
 
 Existing VPC and subnet IDs are variables only. This scaffold does not use
 Terraform data sources or modules.
@@ -129,7 +157,13 @@ wiring, redirects, WAF, and other production hardening belong to later phases
 after explicit review.
 
 Do not store AWS credentials, account IDs, secret values, real ARNs, database
-URLs, Redis URLs, or webhook secrets in Terraform files or tfvars files.
+passwords, database URLs, Redis URLs, or webhook secrets in Terraform files or
+tfvars files.
+
+Before production use, review RDS deletion protection, backup retention, final
+snapshot behavior, Multi-AZ, storage sizing, maintenance settings, and the
+database migration strategy. The scaffold defaults favor no-apply review, not
+production durability.
 
 ## State backend plan
 

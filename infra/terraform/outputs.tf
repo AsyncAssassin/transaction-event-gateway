@@ -43,6 +43,32 @@ output "rds_security_group_id" {
   value       = aws_security_group.rds.id
 }
 
+output "postgres_endpoint" {
+  description = "Connection endpoint for the private PostgreSQL RDS instance."
+  value       = aws_db_instance.postgres.endpoint
+}
+
+output "postgres_port" {
+  description = "Port for the private PostgreSQL RDS instance."
+  value       = aws_db_instance.postgres.port
+}
+
+output "postgres_database_name" {
+  description = "Initial database name configured for PostgreSQL."
+  value       = aws_db_instance.postgres.db_name
+}
+
+output "postgres_instance_id" {
+  description = "Identifier of the PostgreSQL RDS instance."
+  value       = aws_db_instance.postgres.id
+}
+
+output "postgres_master_user_secret_arn" {
+  description = "ARN of the AWS-managed RDS master user secret."
+  value       = try(aws_db_instance.postgres.master_user_secret[0].secret_arn, null)
+  sensitive   = true
+}
+
 output "redis_security_group_id" {
   description = "ID of the security group intended for the future ElastiCache Redis cluster."
   value       = aws_security_group.redis.id

@@ -4,15 +4,15 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Design only |
+| Status | Design with incremental Terraform scaffold |
 | Scope | MVP AWS deployment architecture |
 | Last updated | 2026-06-21 |
 
 ## Scope
 
-This document describes a recommended MVP AWS deployment shape for `transaction-event-gateway`. It is a handoff document for a later infrastructure phase.
+This document describes a recommended MVP AWS deployment shape for `transaction-event-gateway`. It is a handoff document for incremental infrastructure phases.
 
-This phase does not implement infrastructure, change application code, change Docker behavior, add deployment workflows, or deploy anything.
+The current Terraform scaffold implements ECR, security groups, the MVP HTTP ALB path, and private RDS PostgreSQL only. It does not change application code, change Docker behavior, add deployment workflows, or deploy anything.
 
 ## Recommended MVP Architecture
 
@@ -172,7 +172,7 @@ Future CI/CD can extend the current GitHub Actions path without adding it in thi
 - Update ECS services and wait for steady state.
 - Run `/health/ready` and smoke verification after deployment.
 
-Deployment credentials and workflows are intentionally out of scope for this docs-only phase.
+Deployment credentials and workflows are intentionally out of scope for the current Terraform scaffold.
 
 ## Rollback Strategy
 
@@ -230,16 +230,16 @@ Gaps to close after MVP:
 - Sophisticated autoscaling policies.
 - Custom admin panel or manual retry UI.
 - Blockchain provider integration beyond the current signed webhook contract.
-- Terraform, CDK, CloudFormation, or any infrastructure implementation in this phase.
+- ECS, Redis, IAM app roles, CloudWatch resources, and deployment workflow implementation in the current Terraform scaffold.
 - AWS credentials, secrets, or live deployment changes.
 
 ## Handoff Checklist for Infrastructure Phase
 
-- Create ECR repository and immutable image tagging policy.
+- Review the current Terraform scaffold for ECR, security groups, ALB, and private RDS PostgreSQL.
 - Define ECS cluster, API service, worker service, and migration task definition.
-- Provision RDS PostgreSQL and ElastiCache Redis in private subnets.
-- Configure ALB, target group, TLS certificate, and `/health/ready` health check.
-- Define least-privilege security groups and IAM roles.
-- Store required environment values in Secrets Manager or SSM Parameter Store.
+- Provision ElastiCache Redis in private subnets.
+- Configure TLS certificate, HTTPS listener, and production ALB hardening.
+- Define least-privilege IAM roles.
+- Store required environment values in Secrets Manager or SSM Parameter Store, including wiring the RDS-managed PostgreSQL secret into `DATABASE_URL`.
 - Add CI/CD only after design review, with migration and rollback gates.
 - Document production migration review expectations before first deployment.

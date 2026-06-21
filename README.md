@@ -21,7 +21,27 @@ Main reliability boundaries:
 - Correlation IDs and structured logging are enabled for HTTP requests and error responses.
 - `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis.
 
-AWS deployment design for a future infrastructure phase: `docs/aws-deployment-design.md`.
+AWS deployment design for future deployment phases: `docs/aws-deployment-design.md`.
+
+## AWS Terraform Scaffold
+
+The current Terraform scaffold in `infra/terraform` implements ECR, security
+groups, the MVP HTTP ALB path, and a private RDS PostgreSQL instance. The RDS
+instance is placed in a DB subnet group built from `private_subnet_ids`, is not
+publicly accessible, and uses the RDS security group that only allows
+PostgreSQL traffic from the ECS tasks security group.
+
+The scaffold is for review and validation only. Do not run Terraform `plan`,
+`apply`, or `destroy` against live AWS without explicit approval.
+
+RDS master credentials are managed by RDS with
+`manage_master_user_password = true`; no database password value belongs in
+Terraform files or tfvars files. A later ECS/secrets phase must retrieve the
+AWS-managed secret and wire `DATABASE_URL` for the API, worker, and migrations.
+
+Before production use, review deletion protection, backup retention, final
+snapshot behavior, Multi-AZ, storage sizing, and the migration execution
+strategy.
 
 ## Prerequisites
 

@@ -22,6 +22,16 @@ app_port                       = 3000
 alb_port                       = 80
 alb_enable_deletion_protection = false
 postgres_port                  = 5432
+postgres_engine_version        = "16.6"
+postgres_instance_class        = "db.t4g.micro"
+postgres_allocated_storage     = 20
+postgres_max_allocated_storage = 100
+postgres_db_name               = "transaction_event_gateway"
+postgres_username              = "app"
+postgres_backup_retention_days = 7
+postgres_multi_az              = false
+postgres_deletion_protection   = false
+postgres_skip_final_snapshot   = true
 redis_port                     = 6379
 health_check_path              = "/health/ready"
 
