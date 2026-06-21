@@ -10,24 +10,24 @@ variable "aws_region" {
 }
 
 variable "project_name" {
-  description = "Short project name used for future resource naming."
+  description = "Short ECR-safe project name used for future resource naming."
   type        = string
   default     = "transaction-event-gateway"
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{2,47}$", var.project_name))
-    error_message = "project_name must be 3 to 48 lowercase letters, numbers, or hyphens, and start with a letter."
+    condition     = length(var.project_name) >= 3 && length(var.project_name) <= 48 && can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.project_name))
+    error_message = "project_name must be 3 to 48 lowercase letters or numbers, with single hyphens only between alphanumeric segments."
   }
 }
 
 variable "environment" {
-  description = "Deployment environment name used for future resource naming and tags."
+  description = "Short ECR-safe deployment environment name used for future resource naming and tags."
   type        = string
   default     = "dev"
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{1,31}$", var.environment))
-    error_message = "environment must be 2 to 32 lowercase letters, numbers, or hyphens, and start with a letter."
+    condition     = length(var.environment) >= 2 && length(var.environment) <= 32 && can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.environment))
+    error_message = "environment must be 2 to 32 lowercase letters or numbers, with single hyphens only between alphanumeric segments."
   }
 }
 
