@@ -1,6 +1,43 @@
 # transaction-event-gateway
 
+![Node.js](https://img.shields.io/badge/Node.js-22.x-339933?logo=nodedotjs&logoColor=white)
+![NestJS](https://img.shields.io/badge/NestJS-11.x-E0234E?logo=nestjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
+![BullMQ](https://img.shields.io/badge/BullMQ-5.x-CB3837)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![Terraform](https://img.shields.io/badge/Terraform-IaC%20scaffold-844FBA?logo=terraform&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-CI-2088FF?logo=githubactions&logoColor=white)
+
 Production-style NestJS backend for idempotent payment intents, signed webhook ingestion, PostgreSQL state, transactional outbox, BullMQ processing, and operational readiness.
+
+## At A Glance
+
+| Area | Current MVP |
+| --- | --- |
+| Runtime | Node.js 22, NestJS 11, TypeScript 5.8 |
+| Processes | API process and worker process from the same codebase |
+| Persistence | PostgreSQL 16, TypeORM migrations, durable idempotency, webhook inbox, outbox, and processing attempts |
+| Queue | Redis 7 and BullMQ; jobs carry durable PostgreSQL IDs only |
+| API | REST endpoints for payment intents and signed webhooks, Swagger UI, OpenAPI JSON, health endpoints |
+| Reliability | PostgreSQL constraints, transactions, row locks, canonical request hashes, HMAC replay protection, transactional outbox |
+| Observability | Structured logs, correlation IDs, liveness/readiness checks, smoke script, operational runbook |
+| Testing | Typecheck, lint, Jest unit/e2e/worker coverage, build, local smoke flow |
+| AWS status | Terraform scaffold defines core ECS/RDS/Redis/ALB shape for review; no live apply or deployment yet |
+
+## Implemented Features
+
+- Idempotent `POST /payment-intents` with `Idempotency-Key`, canonical request hashing, response snapshots, and conflict detection.
+- Signed `POST /webhooks/blockchain` acceptance with timestamp tolerance, nonce replay protection, and HMAC validation over the raw request body.
+- PostgreSQL schema and migrations for payment intents, idempotency records, webhook inbox rows, outbox rows, and processing attempts.
+- Transactional outbox between webhook acceptance and BullMQ publication.
+- Separate worker process for outbox dispatch and idempotent webhook processing.
+- Durable worker decisions through PostgreSQL row locks, state checks, and processing attempt records.
+- Swagger/OpenAPI docs plus liveness and readiness endpoints.
+- Structured request and application logging with correlation IDs.
+- Local Docker Compose infrastructure, e2e coverage, worker/BullMQ coverage, and a repeatable smoke script.
+- AWS Terraform scaffold for ECR, security groups, ALB, private RDS PostgreSQL, private ElastiCache Redis, ECS Fargate task definitions/services, task log groups, and minimal ECS task execution IAM.
 
 ## Architecture
 
@@ -21,15 +58,26 @@ Main reliability boundaries:
 - Correlation IDs and structured logging are enabled for HTTP requests and error responses.
 - `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis.
 
-AWS deployment design for future deployment phases: `docs/aws-deployment-design.md`.
+Detailed documentation:
 
-## AWS Terraform Scaffold
+- [Architecture](docs/architecture.md): service topology, flows, state machines, transaction boundaries, and non-goals.
+- [API specification](docs/api.md): endpoint contracts, validation rules, error shapes, and OpenAPI expectations.
+- [Database specification](docs/database.md): tables, enum types, constraints, migration order, and rollback notes.
+- [Failure modes](docs/failure-modes.md): expected behavior for duplicate requests, webhook replays, queue failures, and worker crashes.
+- [Testing strategy](docs/testing.md): unit, integration, e2e, worker, concurrency, and smoke coverage expectations.
+- [Operational runbook](docs/runbook.md): health checks, database inspection, outbox diagnosis, worker troubleshooting, and local reset commands.
+- [AWS deployment design](docs/aws-deployment-design.md): target AWS shape, release flow, observability minimum, and explicit gaps.
+- [Terraform scaffold notes](infra/terraform/README.md): current IaC scope, validation-only status, and approval-gated commands.
+- [Implementation plan](docs/implementation-plan.md): phased implementation history and current documentation status.
 
-The current Terraform scaffold in `infra/terraform` implements ECR, security
-groups, the MVP HTTP ALB path, a private RDS PostgreSQL instance, private
-ElastiCache Redis, ECS Fargate task definitions, an ECS cluster, API and worker
-ECS services, task log groups, and the minimal ECS task execution role. It does
-not define autoscaling, deployment workflows, or secrets wiring.
+## AWS Terraform Status
+
+The Terraform scaffold in `infra/terraform` implements ECR, security groups,
+the MVP HTTP ALB path, a private RDS PostgreSQL instance, private ElastiCache
+Redis, ECS Fargate task definitions, an ECS cluster, API and worker ECS
+services, task log groups, and the minimal ECS task execution role. It does not
+define autoscaling, deployment workflows, private egress infrastructure, or
+runtime secrets wiring.
 
 The scaffold is for review and validation only. Do not run Terraform `plan`,
 `apply`, or `destroy` against live AWS without explicit approval.
@@ -221,6 +269,27 @@ Dispatcher behavior is controlled by `OUTBOX_DISPATCH_ENABLED` and `OUTBOX_DISPA
 
 Operational troubleshooting notes are in `docs/runbook.md`.
 
+## Reliability Highlights
+
+- PostgreSQL is the authoritative store for payment state, idempotency, webhook inbox rows, outbox rows, and processing attempts.
+- Redis/BullMQ is required for asynchronous progress, but not for durable correctness.
+- `POST /payment-intents` is protected by a scoped idempotency key, canonical request hash, stored response snapshot, and PostgreSQL uniqueness.
+- Webhook acceptance validates timestamp, nonce, and HMAC before persistence; invalid signatures and stale timestamps do not create inbox or outbox rows.
+- Webhook inbox and outbox rows commit in the same PostgreSQL transaction, avoiding a database/queue dual-write gap.
+- Outbox publication is at-least-once; duplicate BullMQ jobs are safe because the worker reloads durable rows and checks current state under row locks.
+- Worker processing records sanitized attempts and leaves payment intent state unchanged on domain mismatches.
+- Readiness checks required configuration, PostgreSQL, and Redis so degraded queue infrastructure is visible before accepting traffic in strict deployments.
+
+## Observability
+
+- Structured logs include correlation IDs, request metadata, safe entity identifiers, statuses, and error codes.
+- `X-Correlation-ID` is accepted on inbound requests; missing values are generated and returned in responses.
+- `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis.
+- Swagger UI and OpenAPI JSON are exposed at `/docs` and `/docs/openapi.json` for the implemented API surface.
+- The smoke script exercises the full local path from health and OpenAPI through idempotency, signed webhook acceptance, outbox publication, worker processing, and final database state.
+- `docs/runbook.md` contains local inspection queries for payment intents, webhook events, outbox rows, and processing attempts.
+- Metrics dashboards, alerting, distributed tracing, and dead-letter inspection workflows are deferred.
+
 ## Testing and Verification
 
 Current verification commands:
@@ -283,3 +352,46 @@ The smoke script checks health, OpenAPI, payment intent idempotency, signed webh
 MVP backend functionality is implemented locally: payment intent creation, idempotency, signed webhook acceptance, PostgreSQL schema and migrations, transactional outbox, BullMQ worker processing, structured logging, correlation IDs, and health/readiness endpoints.
 
 Manual retry endpoint, metrics dashboards, authentication, authorization, and real provider integrations are intentional future extensions.
+
+The AWS Terraform scaffold is implemented for structure review and validation, but no image push, secrets wiring, private egress path, Terraform apply, or live deployment has been completed.
+
+## MVP Boundaries
+
+This MVP does not provide custody, private key storage, wallet functionality, signing, real funds movement, or a real blockchain/provider integration. It does not include authentication, authorization, multitenancy, a manual retry API, admin UI, metrics dashboards, alerting, tracing, autoscaling, deployment automation, or a live AWS environment.
+
+Terraform currently defines an infrastructure skeleton only. Real deployment still requires approved secrets/environment wiring, private egress for ECS tasks, an image push path, migration execution strategy, cost and durability review, and explicit approval before any live AWS operation.
+
+## Repository Layout
+
+```text
+.
+  README.md
+  Dockerfile
+  docker-compose.yml
+  package.json
+  .env.example
+  docs/
+    api.md
+    architecture.md
+    aws-deployment-design.md
+    database.md
+    failure-modes.md
+    implementation-plan.md
+    runbook.md
+    testing.md
+  infra/terraform/
+  migrations/
+  scripts/
+    smoke-local.sh
+  src/
+    common/
+    config/
+    database/
+    health/
+    outbox/
+    payment-intents/
+    processing/
+    webhooks/
+  test/
+  .github/workflows/
+```

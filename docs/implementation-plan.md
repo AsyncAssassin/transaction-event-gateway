@@ -2,7 +2,9 @@
 
 ## Overview
 
-This plan keeps implementation incremental and aligned with `docs/architecture.md`. The project has progressed through scaffold, database, payment intents, webhooks, outbox/BullMQ, and observability phases. The current phase is README and operational documentation.
+This plan keeps implementation incremental and aligned with `docs/architecture.md`. The project has progressed through scaffold, database, payment intents, webhooks, outbox/BullMQ, observability, local operational docs, and an AWS Terraform review scaffold.
+
+The current phase is README and documentation polish. The Terraform scaffold is not a live deployment and still requires approved secrets wiring, private egress review, image publishing, migration execution planning, and explicit apply approval before any AWS use.
 
 ## Phase 1: Specs
 
