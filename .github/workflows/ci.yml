@@ -72,6 +72,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Validate Docker Compose config
+        run: docker compose config
+
+      - name: Build production Docker image
+        run: docker build -t transaction-event-gateway:ci .
+
       - name: Verify schema drift
         run: DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run typeorm -- schema:log
 
