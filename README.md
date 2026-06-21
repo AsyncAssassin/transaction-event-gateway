@@ -71,6 +71,20 @@ Detailed documentation:
 - [Terraform scaffold notes](infra/terraform/README.md): current IaC scope, validation-only status, and approval-gated commands.
 - [Implementation plan](docs/implementation-plan.md): phased implementation history and current documentation status.
 
+## Screenshots
+
+Swagger UI shows the generated OpenAPI surface exposed by the running service.
+
+![Swagger UI](docs/assets/swagger-ui.png)
+
+The readiness capture shows the API process validating configuration, PostgreSQL, and Redis.
+
+![Readiness endpoint](docs/assets/health-ready.png)
+
+The smoke capture shows a local webhook reaching processed webhook and published outbox state.
+
+![Smoke outbox proof](docs/assets/smoke-outbox.png)
+
 ## AWS Terraform Status
 
 The Terraform scaffold in `infra/terraform` implements ECR, security groups,
