@@ -185,6 +185,8 @@ The worker process starts the dispatcher runner and the BullMQ consumer. The dis
 
 Dispatcher behavior is controlled by `OUTBOX_DISPATCH_ENABLED` and `OUTBOX_DISPATCH_INTERVAL_MS`. Jobs contain only `webhookEventId`, so duplicate publication or duplicate delivery is safe: the worker reloads the durable webhook event, locks rows in PostgreSQL, checks current status, and records processing attempts.
 
+Operational troubleshooting notes are in `docs/runbook.md`.
+
 ## Testing and Verification
 
 Current verification commands:
