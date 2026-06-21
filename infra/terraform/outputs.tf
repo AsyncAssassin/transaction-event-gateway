@@ -28,5 +28,22 @@ output "ecr_repository_arn" {
   value       = aws_ecr_repository.app.arn
 }
 
-# Future phases can add concrete outputs for ALB, ECS, RDS, and Redis IDs
-# only after those resources are implemented.
+output "alb_security_group_id" {
+  description = "ID of the security group intended for the future public ALB."
+  value       = aws_security_group.alb.id
+}
+
+output "ecs_tasks_security_group_id" {
+  description = "ID of the security group intended for future ECS API and worker tasks."
+  value       = aws_security_group.ecs_tasks.id
+}
+
+output "rds_security_group_id" {
+  description = "ID of the security group intended for the future RDS PostgreSQL instance."
+  value       = aws_security_group.rds.id
+}
+
+output "redis_security_group_id" {
+  description = "ID of the security group intended for the future ElastiCache Redis cluster."
+  value       = aws_security_group.redis.id
+}

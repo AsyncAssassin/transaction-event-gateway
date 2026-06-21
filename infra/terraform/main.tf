@@ -4,4 +4,4 @@
 # - ECS cluster, API service, worker service, and migration task definition.
 # - ALB, target group, listeners, and health check wiring.
 # - RDS PostgreSQL and ElastiCache Redis in private networking.
-# - IAM roles, security groups, CloudWatch logs, and Secrets Manager or SSM wiring.
+# - IAM roles, CloudWatch logs, and Secrets Manager or SSM wiring.
