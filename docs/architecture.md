@@ -5,10 +5,10 @@
 | Field | Value |
 | --- | --- |
 | Title | transaction-event-gateway Architecture |
-| Status | Draft |
+| Status | Current MVP architecture |
 | Scope | MVP backend service |
 | Stack | TypeScript, Node.js, NestJS, TypeORM, PostgreSQL, Redis, BullMQ, Docker Compose, Jest, Supertest |
-| Last updated | TODO: YYYY-MM-DD |
+| Last updated | 2026-06-22 |
 
 ## Assumptions
 
@@ -343,7 +343,7 @@ Terminal states:
 
 `FAILED` is not terminal because manual retry is allowed.
 
-## PostgreSQL Schema Draft
+## PostgreSQL Schema
 
 ### `payment_intents`
 

@@ -1,6 +1,6 @@
 # Domain State Machine Specification
 
-Status: Draft
+Status: Current MVP lifecycle specification
 Scope: current MVP payment intent, webhook inbox, outbox, and worker lifecycle
 Source of truth: PostgreSQL durable state and current implementation
 
