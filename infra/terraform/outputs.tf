@@ -70,8 +70,23 @@ output "postgres_master_user_secret_arn" {
 }
 
 output "redis_security_group_id" {
-  description = "ID of the security group intended for the future ElastiCache Redis cluster."
+  description = "ID of the security group intended for the ElastiCache Redis replication group."
   value       = aws_security_group.redis.id
+}
+
+output "redis_primary_endpoint_address" {
+  description = "Primary endpoint address for the private Redis ElastiCache replication group."
+  value       = aws_elasticache_replication_group.redis.primary_endpoint_address
+}
+
+output "redis_port" {
+  description = "Port for the private Redis ElastiCache replication group."
+  value       = var.redis_port
+}
+
+output "redis_replication_group_id" {
+  description = "Identifier of the Redis ElastiCache replication group."
+  value       = aws_elasticache_replication_group.redis.id
 }
 
 output "alb_dns_name" {

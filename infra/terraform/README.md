@@ -5,10 +5,11 @@
 This directory is an incremental Terraform scaffold for a future AWS MVP
 deployment of `transaction-event-gateway`. It currently defines the ECR
 repository needed to store application images, the minimal security groups for
-ALB, future ECS tasks, RDS PostgreSQL, and future ElastiCache Redis resources,
-the MVP HTTP Application Load Balancer path for the future API service, and a
-private RDS PostgreSQL instance. It is not ready for `apply` and does not
-require AWS credentials for formatting or validation.
+ALB, future ECS tasks, RDS PostgreSQL, and ElastiCache Redis resources, the MVP
+HTTP Application Load Balancer path for the future API service, a private RDS
+PostgreSQL instance, and a private ElastiCache Redis replication group. It is
+not ready for `apply` and does not require AWS credentials for formatting or
+validation.
 
 The current Terraform files are intended to support structure review,
 formatting, and validation only. They should not be used to create, update, or
@@ -30,8 +31,9 @@ delete live infrastructure in this phase without explicit approval.
 - `alb.tf`: internet-facing ALB, HTTP target group, and HTTP listener for the
   future API service.
 - `rds.tf`: private DB subnet group and RDS PostgreSQL instance.
+- `redis.tf`: private ElastiCache Redis subnet group and replication group.
 - `outputs.tf`: scaffold outputs plus ECR repository, security group IDs, and
-  ALB and RDS values.
+  ALB, RDS, and Redis values.
 - `example.tfvars`: dummy values for local review. Do not put real secrets here.
 
 ## Planned AWS resource phases
@@ -45,10 +47,9 @@ The resource implementation should continue in small phases after review:
 5. HTTPS listener, ACM certificate, and optional production ALB hardening.
 6. ECS worker task definition and worker service with no inbound traffic.
 7. One-off ECS migration task definition.
-8. ElastiCache Redis in private networking.
-9. Secrets Manager or SSM Parameter Store wiring for runtime values, including
+8. Secrets Manager or SSM Parameter Store wiring for runtime values, including
    wiring the RDS-managed PostgreSQL secret into `DATABASE_URL`.
-10. Release workflow design after explicit approval.
+9. Release workflow design after explicit approval.
 
 ## Variables
 
@@ -77,13 +78,23 @@ The resource implementation should continue in small phases after review:
 | `postgres_multi_az` | Multi-AZ switch for PostgreSQL. Defaults to `false` for this no-apply MVP scaffold. |
 | `postgres_deletion_protection` | RDS deletion protection switch. Defaults to `false` for this no-apply MVP scaffold. |
 | `postgres_skip_final_snapshot` | RDS final snapshot skip switch. Defaults to `true` for this no-apply MVP scaffold; production should usually set this to `false`. |
-| `redis_port` | Redis port for future ElastiCache access. Defaults to `6379`. |
+| `redis_port` | Redis port for ElastiCache access. Defaults to `6379`. |
+| `redis_node_type` | ElastiCache Redis node type. Defaults to `cache.t4g.micro` for scaffold review. |
+| `redis_engine_version` | Redis engine version. Defaults to `7.1`. |
+| `redis_num_cache_clusters` | Number of Redis cache clusters in the replication group. Defaults to `1`; use at least `2` with automatic failover. |
+| `redis_automatic_failover_enabled` | Redis automatic failover switch. Defaults to `false` for this no-apply MVP scaffold. |
+| `redis_multi_az_enabled` | Redis Multi-AZ switch. Defaults to `false`; requires automatic failover when enabled. |
+| `redis_at_rest_encryption_enabled` | Redis at-rest encryption switch. Defaults to `true`. |
+| `redis_transit_encryption_enabled` | Redis in-transit encryption switch. Defaults to `false` because current app config validates `redis://` URLs only. |
+| `redis_snapshot_retention_limit` | Redis automatic snapshot retention in days. Defaults to `7`; use `0` to disable snapshots. |
+| `redis_apply_immediately` | Whether Redis changes should apply immediately. Defaults to `false` so reviewed changes can wait for the next maintenance window. |
 | `health_check_path` | Future ALB health check path. Defaults to `/health/ready`. |
 | `tags` | Additional non-secret tags for future AWS resources. |
 
 ## Current resource scope
 
-This phase defines only ECR, security group, ALB, and RDS PostgreSQL resources:
+This phase defines only ECR, security group, ALB, RDS PostgreSQL, and
+ElastiCache Redis resources:
 
 - `aws_ecr_repository.app`: application image repository named from
   `local.name_prefix`, with immutable image tags, scan on push, and AES256
@@ -126,6 +137,11 @@ This phase defines only ECR, security group, ALB, and RDS PostgreSQL resources:
 - `aws_db_instance.postgres`: private RDS PostgreSQL instance using
   `aws_security_group.rds.id`, encrypted `gp3` storage, automated backups, and
   an AWS-managed master user password.
+- `aws_elasticache_subnet_group.redis`: Redis subnet group built only from
+  `private_subnet_ids`.
+- `aws_elasticache_replication_group.redis`: private Redis replication group
+  using `aws_security_group.redis.id`, at-rest encryption, automatic snapshots,
+  and configurable failover, Multi-AZ, node sizing, and transit encryption.
 
 The target group health check uses `/health/ready`. That endpoint checks
 required app configuration, PostgreSQL, and Redis readiness. This intentionally
@@ -144,10 +160,24 @@ RDS uses `manage_master_user_password = true`, so Terraform does not take or
 store a plaintext database password. The AWS-managed master user secret ARN is
 exposed as a sensitive output for later wiring.
 
-No VPC, subnet, route table, NAT gateway, ECS service, ECS task definition,
-ElastiCache cluster, IAM, standalone Secrets Manager resource, CloudWatch,
-deployment workflow, registry login, or image push behavior is implemented in
-this phase.
+The Redis replication group uses a private ElastiCache subnet group built from
+`private_subnet_ids` and is attached only to `aws_security_group.redis.id`.
+Redis is not public and is reachable only from future ECS tasks through the
+existing Redis security group rule. Redis backs BullMQ queue infrastructure; it
+is not the source of truth for accepted webhook work or payment state.
+
+Redis at-rest encryption defaults to enabled. Redis in-transit encryption
+defaults to disabled in this slice because the current application validation
+accepts only `redis://` URLs. A production move to Redis TLS should first update
+client configuration and runtime validation for `rediss://`, then enable
+`redis_transit_encryption_enabled` during a reviewed infrastructure change.
+
+No ECS task currently receives `REDIS_URL`; a later ECS/secrets phase must build
+the runtime connection string from the Redis primary endpoint and port.
+
+No VPC, subnet, route table, NAT gateway, ECS service, ECS task definition, IAM,
+standalone Secrets Manager resource, CloudWatch, deployment workflow, registry
+login, or image push behavior is implemented in this phase.
 
 Existing VPC and subnet IDs are variables only. This scaffold does not use
 Terraform data sources or modules.
@@ -162,8 +192,9 @@ tfvars files.
 
 Before production use, review RDS deletion protection, backup retention, final
 snapshot behavior, Multi-AZ, storage sizing, maintenance settings, and the
-database migration strategy. The scaffold defaults favor no-apply review, not
-production durability.
+database migration strategy. Also review Redis transit encryption and client
+configuration, automatic snapshots, failover, Multi-AZ, and node sizing. The
+scaffold defaults favor no-apply review, not production durability.
 
 ## State backend plan
 

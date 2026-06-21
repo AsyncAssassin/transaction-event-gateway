@@ -234,7 +234,7 @@ variable "postgres_skip_final_snapshot" {
 }
 
 variable "redis_port" {
-  description = "Redis port for the future ElastiCache cluster."
+  description = "Redis port for the ElastiCache replication group."
   type        = number
   default     = 6379
 
@@ -242,6 +242,80 @@ variable "redis_port" {
     condition     = var.redis_port >= 1 && var.redis_port <= 65535
     error_message = "redis_port must be between 1 and 65535."
   }
+}
+
+variable "redis_node_type" {
+  description = "ElastiCache node type for Redis."
+  type        = string
+  default     = "cache.t4g.micro"
+
+  validation {
+    condition     = can(regex("^cache\\.[a-z0-9][a-z0-9.-]*$", var.redis_node_type))
+    error_message = "redis_node_type must look like an ElastiCache node type, for example cache.t4g.micro."
+  }
+}
+
+variable "redis_engine_version" {
+  description = "Redis engine version for the ElastiCache replication group."
+  type        = string
+  default     = "7.1"
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?$", var.redis_engine_version))
+    error_message = "redis_engine_version must be a Redis major or major.minor version, for example 7 or 7.1."
+  }
+}
+
+variable "redis_num_cache_clusters" {
+  description = "Number of cache clusters in the Redis replication group. Use at least 2 with automatic failover."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.redis_num_cache_clusters >= 1 && var.redis_num_cache_clusters <= 6 && var.redis_num_cache_clusters == floor(var.redis_num_cache_clusters)
+    error_message = "redis_num_cache_clusters must be an integer between 1 and 6."
+  }
+}
+
+variable "redis_automatic_failover_enabled" {
+  description = "Whether to enable automatic failover for Redis. Requires at least two cache clusters."
+  type        = bool
+  default     = false
+}
+
+variable "redis_multi_az_enabled" {
+  description = "Whether to enable Multi-AZ for Redis. Requires automatic failover."
+  type        = bool
+  default     = false
+}
+
+variable "redis_at_rest_encryption_enabled" {
+  description = "Whether to enable at-rest encryption for Redis."
+  type        = bool
+  default     = true
+}
+
+variable "redis_transit_encryption_enabled" {
+  description = "Whether to enable in-transit encryption for Redis. Defaults to false because current app configuration accepts redis:// URLs only."
+  type        = bool
+  default     = false
+}
+
+variable "redis_snapshot_retention_limit" {
+  description = "Number of days to retain automatic Redis snapshots. Use 0 to disable snapshots."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.redis_snapshot_retention_limit >= 0 && var.redis_snapshot_retention_limit <= 35 && var.redis_snapshot_retention_limit == floor(var.redis_snapshot_retention_limit)
+    error_message = "redis_snapshot_retention_limit must be an integer between 0 and 35."
+  }
+}
+
+variable "redis_apply_immediately" {
+  description = "Whether Redis changes should apply immediately. Defaults to false so reviewed changes can wait for the next maintenance window."
+  type        = bool
+  default     = false
 }
 
 variable "health_check_path" {

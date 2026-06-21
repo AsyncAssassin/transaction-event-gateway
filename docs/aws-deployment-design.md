@@ -12,7 +12,7 @@
 
 This document describes a recommended MVP AWS deployment shape for `transaction-event-gateway`. It is a handoff document for incremental infrastructure phases.
 
-The current Terraform scaffold implements ECR, security groups, the MVP HTTP ALB path, and private RDS PostgreSQL only. It does not change application code, change Docker behavior, add deployment workflows, or deploy anything.
+The current Terraform scaffold implements ECR, security groups, the MVP HTTP ALB path, private RDS PostgreSQL, and private ElastiCache Redis. It does not change application code, change Docker behavior, add deployment workflows, or deploy anything.
 
 ## Recommended MVP Architecture
 
@@ -230,14 +230,14 @@ Gaps to close after MVP:
 - Sophisticated autoscaling policies.
 - Custom admin panel or manual retry UI.
 - Blockchain provider integration beyond the current signed webhook contract.
-- ECS, Redis, IAM app roles, CloudWatch resources, and deployment workflow implementation in the current Terraform scaffold.
+- ECS, IAM app roles, CloudWatch resources, and deployment workflow implementation in the current Terraform scaffold.
 - AWS credentials, secrets, or live deployment changes.
 
 ## Handoff Checklist for Infrastructure Phase
 
-- Review the current Terraform scaffold for ECR, security groups, ALB, and private RDS PostgreSQL.
+- Review the current Terraform scaffold for ECR, security groups, ALB, private RDS PostgreSQL, and private ElastiCache Redis.
 - Define ECS cluster, API service, worker service, and migration task definition.
-- Provision ElastiCache Redis in private subnets.
+- Review ElastiCache Redis failover, Multi-AZ, TLS client settings, snapshots, and node sizing before production use.
 - Configure TLS certificate, HTTPS listener, and production ALB hardening.
 - Define least-privilege IAM roles.
 - Store required environment values in Secrets Manager or SSM Parameter Store, including wiring the RDS-managed PostgreSQL secret into `DATABASE_URL`.
