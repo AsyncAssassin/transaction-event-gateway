@@ -89,6 +89,13 @@ DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run
 DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run migration:revert
 ```
 
+Production images run migrations from compiled JavaScript:
+
+```bash
+npm run build
+DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run migration:run:prod
+```
+
 Start the API in development mode:
 
 ```bash

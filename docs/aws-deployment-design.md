@@ -93,7 +93,7 @@ The API and worker should be separate ECS services even though they use the same
 ### Migration Task
 
 - ECS one-off task: uses the same image version as the release.
-- Command override: run database migrations before rolling API and worker services, for example `npm run migration:run`.
+- Command override: run database migrations before rolling API and worker services, for example `npm run migration:run:prod`.
 - Network: private subnets with access to RDS and secrets.
 - Execution: must finish successfully before service rollout proceeds.
 - Safety: production migrations require review for lock behavior, runtime duration, and rollback limits.
@@ -216,7 +216,7 @@ Gaps to close after MVP:
 
 - The current image default starts the API process; ECS worker and migration tasks need explicit command overrides.
 - The current Terraform task definitions intentionally omit `DATABASE_URL`, `REDIS_URL`, and `WEBHOOK_SECRET` until a dedicated secrets phase wires approved secret sources.
-- The migration task command matches the current package script, but the production image migration runtime should be reviewed before first ECS execution because the image currently copies compiled `dist` output and production dependencies only.
+- The migration task command uses the compiled production migration script and still requires approved `DATABASE_URL` secrets wiring before first ECS execution.
 - `LOG_LEVEL` is a deployment design item, but current runtime support should be verified before using it as an operational control.
 - Worker scaling should be conservative until production-like queue behavior and database lock contention are measured.
 - ALB readiness depends on both PostgreSQL and Redis. This is strict and production-safe, but it means Redis incidents can remove API tasks from rotation even though some durable writes may still be possible.

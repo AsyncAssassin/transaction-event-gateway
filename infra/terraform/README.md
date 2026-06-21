@@ -170,13 +170,13 @@ group resources:
 - `aws_ecs_task_definition.worker`: Fargate worker task definition using
   `var.container_image`, `node dist/worker.js`, and the worker log group.
 - `aws_ecs_task_definition.migration`: Fargate one-off migration task
-  definition using `var.container_image`, `npm run migration:run`, and the
-  migration log group.
+  definition using `var.container_image`, `npm run migration:run:prod`, and
+  the migration log group.
 
-The migration task definition follows the existing package script. Before a
-real one-off ECS migration run is enabled, a later Docker or migration-runtime
-phase must verify that the production image includes runnable migration
-artifacts and dependencies.
+The migration task definition uses the compiled production migration script.
+Before a real one-off ECS migration run is enabled, verify the selected image
+digest can run migrations against the target database with approved secrets
+wiring.
 
 The target group health check uses `/health/ready`. That endpoint checks
 required app configuration, PostgreSQL, and Redis readiness. This intentionally

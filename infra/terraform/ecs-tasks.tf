@@ -183,7 +183,7 @@ resource "aws_ecs_task_definition" "migration" {
       name        = "migration"
       image       = var.container_image
       essential   = true
-      command     = ["npm", "run", "migration:run"]
+      command     = ["npm", "run", "migration:run:prod"]
       environment = local.ecs_app_environment
       logConfiguration = {
         logDriver = "awslogs"
