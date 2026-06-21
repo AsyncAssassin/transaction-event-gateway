@@ -61,6 +61,7 @@ Main reliability boundaries:
 Detailed documentation:
 
 - [Architecture](docs/architecture.md): service topology, flows, state machines, transaction boundaries, and non-goals.
+- [Domain state machine](docs/domain-state-machine.md): payment intent, webhook inbox, outbox, and worker lifecycle transitions.
 - [API specification](docs/api.md): endpoint contracts, validation rules, error shapes, and OpenAPI expectations.
 - [Database specification](docs/database.md): tables, enum types, constraints, migration order, and rollback notes.
 - [Failure modes](docs/failure-modes.md): expected behavior for duplicate requests, webhook replays, queue failures, and worker crashes.

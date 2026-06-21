@@ -11,7 +11,7 @@ The current phase is README and documentation polish. The Terraform scaffold is 
 Deliverables:
 
 - Maintain `docs/architecture.md` as the source architecture document.
-- Add focused specs for API, database, testing, failure modes, and implementation phases.
+- Add focused specs for API, database, [domain state machine](domain-state-machine.md), testing, failure modes, and implementation phases.
 - Keep documentation in English and avoid product claims outside the architecture.
 
 Verification commands:
