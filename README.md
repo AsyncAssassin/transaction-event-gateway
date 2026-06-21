@@ -21,6 +21,8 @@ Main reliability boundaries:
 - Correlation IDs and structured logging are enabled for HTTP requests and error responses.
 - `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis.
 
+AWS deployment design for a future infrastructure phase: `docs/aws-deployment-design.md`.
+
 ## Prerequisites
 
 - Node.js 22.x, matching the Docker runtime image (`node:22-alpine`).
