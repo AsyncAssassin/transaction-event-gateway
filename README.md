@@ -2,7 +2,7 @@
 
 ![Node.js](https://img.shields.io/badge/Node.js-22.x-339933?logo=nodedotjs&logoColor=white)
 ![NestJS](https://img.shields.io/badge/NestJS-11.x-E0234E?logo=nestjs&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
 ![BullMQ](https://img.shields.io/badge/BullMQ-5.x-CB3837)
@@ -16,7 +16,7 @@ Production-style NestJS backend for idempotent payment intents, signed webhook i
 
 | Area | Current MVP |
 | --- | --- |
-| Runtime | Node.js 22, NestJS 11, TypeScript 5.8 |
+| Runtime | Node.js 22, NestJS 11, TypeScript 5.9 |
 | Processes | API process and worker process from the same codebase |
 | Persistence | PostgreSQL 16, TypeORM migrations, durable idempotency, webhook inbox, outbox, and processing attempts |
 | Queue | Redis 7 and BullMQ; jobs carry durable PostgreSQL IDs only |
