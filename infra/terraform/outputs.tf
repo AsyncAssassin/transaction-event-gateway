@@ -109,6 +109,21 @@ output "alb_listener_arn" {
   value       = aws_lb_listener.http.arn
 }
 
+output "ecs_cluster_name" {
+  description = "Name of the ECS cluster for API and worker services."
+  value       = aws_ecs_cluster.main.name
+}
+
+output "api_service_name" {
+  description = "Name of the ECS API service attached to the ALB target group."
+  value       = aws_ecs_service.api.name
+}
+
+output "worker_service_name" {
+  description = "Name of the ECS worker service without load balancer attachment."
+  value       = aws_ecs_service.worker.name
+}
+
 output "api_task_definition_arn" {
   description = "ARN of the ECS Fargate API task definition."
   value       = aws_ecs_task_definition.api.arn

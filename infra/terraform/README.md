@@ -5,13 +5,14 @@
 This directory is an incremental Terraform scaffold for a future AWS MVP
 deployment of `transaction-event-gateway`. It currently defines the ECR
 repository needed to store application images, the minimal security groups for
-ALB, future ECS tasks, RDS PostgreSQL, and ElastiCache Redis resources, the MVP
-HTTP Application Load Balancer path for the future API service, a private RDS
-PostgreSQL instance, a private ElastiCache Redis replication group, and ECS
-Fargate task definitions for the API, worker, and one-off migration runtime
-units. It also includes the minimal ECS task execution role and CloudWatch log
-groups needed by those task definitions. It is not ready for `apply` and does
-not require AWS credentials for formatting or validation.
+ALB, ECS tasks, RDS PostgreSQL, and ElastiCache Redis resources, the MVP HTTP
+Application Load Balancer path for the API service, a private RDS PostgreSQL
+instance, a private ElastiCache Redis replication group, ECS Fargate task
+definitions for the API, worker, and one-off migration runtime units, and ECS
+cluster/API/worker service resources. It also includes the minimal ECS task
+execution role and CloudWatch log groups needed by those task definitions. It
+is not ready for `apply` and does not require AWS credentials for formatting or
+validation.
 
 The current Terraform files are intended to support structure review,
 formatting, and validation only. They should not be used to create, update, or
@@ -31,13 +32,16 @@ delete live infrastructure in this phase without explicit approval.
 - `security-groups.tf`: security groups and explicit rules for the future ALB,
   ECS tasks, RDS PostgreSQL, and Redis network path.
 - `alb.tf`: internet-facing ALB, HTTP target group, and HTTP listener for the
-  future API service.
+  API service.
 - `rds.tf`: private DB subnet group and RDS PostgreSQL instance.
 - `redis.tf`: private ElastiCache Redis subnet group and replication group.
 - `ecs-tasks.tf`: ECS Fargate task definitions for API, worker, and migration
   tasks, plus minimal task execution IAM and task log groups.
+- `ecs-services.tf`: ECS cluster plus Fargate API and worker services. The API
+  service is attached to the ALB target group; the worker has no load balancer.
 - `outputs.tf`: scaffold outputs plus ECR repository, security group IDs, and
-  ALB, RDS, Redis, ECS task definition, and execution role values.
+  ALB, RDS, Redis, ECS cluster/service, ECS task definition, and execution role
+  values.
 - `example.tfvars`: dummy values for local review. Do not put real secrets here.
 
 ## Planned AWS resource phases
@@ -46,8 +50,7 @@ The resource implementation should continue in small phases after review:
 
 1. State backend design and environment layout.
 2. Network path selection: existing VPC inputs first, optional managed VPC later.
-3. ECS cluster, API service, worker service, and the one-off migration task run
-   path.
+3. One-off migration task run path.
 4. HTTPS listener, ACM certificate, and optional production ALB hardening.
 5. Secrets Manager or SSM Parameter Store wiring for runtime values, including
    wiring the RDS-managed PostgreSQL secret into `DATABASE_URL`.
@@ -69,6 +72,8 @@ The resource implementation should continue in small phases after review:
 | `worker_task_memory` | Fargate memory in MiB for the worker task definition. |
 | `migration_task_cpu` | Fargate CPU units for the one-off migration task definition. |
 | `migration_task_memory` | Fargate memory in MiB for the one-off migration task definition. |
+| `api_desired_count` | Desired number of API ECS service tasks. Defaults to `1` for scaffold review. |
+| `worker_desired_count` | Desired number of worker ECS service tasks. Defaults to `1` for scaffold review. |
 | `ecs_log_retention_days` | CloudWatch Logs retention for API, worker, and migration task log groups. |
 | `app_environment_variables` | Non-secret environment variables injected into all ECS task definitions. Defaults to `NODE_ENV=production` and `PORT=3000`; do not place secrets here. |
 | `create_vpc` | Future switch for managed VPC creation. Current scaffold does not create VPC resources. |
@@ -106,8 +111,8 @@ The resource implementation should continue in small phases after review:
 ## Current resource scope
 
 This phase defines only ECR, security group, ALB, RDS PostgreSQL, ElastiCache
-Redis, ECS task definition, minimal ECS task execution IAM, and ECS task log
-group resources:
+Redis, ECS task definition, ECS cluster/service, minimal ECS task execution IAM,
+and ECS task log group resources:
 
 - `aws_ecr_repository.app`: application image repository named from
   `local.name_prefix`, with immutable image tags, scan on push, and AES256
@@ -143,8 +148,8 @@ group resources:
   `target_type = "ip"` for future ECS Fargate API tasks and `/health/ready`
   health checks.
 - `aws_lb_listener.http`: MVP HTTP listener on `alb_port` that forwards to the
-  future API target group. Until a future ECS service registers targets, the
-  listener can return no-target responses from the empty target group.
+  API target group. Until an approved deployment registers healthy API targets,
+  the listener can return no-target responses from the empty target group.
 - `aws_db_subnet_group.postgres`: DB subnet group built only from
   `private_subnet_ids`.
 - `aws_db_instance.postgres`: private RDS PostgreSQL instance using
@@ -172,6 +177,16 @@ group resources:
 - `aws_ecs_task_definition.migration`: Fargate one-off migration task
   definition using `var.container_image`, `npm run migration:run:prod`, and
   the migration log group.
+- `aws_ecs_cluster.main`: ECS cluster for the API and worker services.
+- `aws_ecs_service.api`: Fargate API service using
+  `aws_ecs_task_definition.api.arn`, `private_subnet_ids`,
+  `aws_security_group.ecs_tasks.id`, `assign_public_ip = false`, and
+  `api_desired_count`. It registers the `api` container on `app_port` with
+  `aws_lb_target_group.api.arn`.
+- `aws_ecs_service.worker`: Fargate worker service using
+  `aws_ecs_task_definition.worker.arn`, `private_subnet_ids`,
+  `aws_security_group.ecs_tasks.id`, `assign_public_ip = false`, and
+  `worker_desired_count`. It has no load balancer attachment.
 
 The migration task definition uses the compiled production migration script.
 Before a real one-off ECS migration run is enabled, verify the selected image
@@ -215,16 +230,26 @@ The ECS task definitions intentionally include only non-secret environment
 variables through `app_environment_variables`. Do not put `DATABASE_URL`,
 `REDIS_URL`, `WEBHOOK_SECRET`, AWS credentials, account IDs, real ARNs, or other
 secret values in Terraform or tfvars files. Because secrets are not wired yet,
-the task definitions are registration scaffolding, not a complete runnable
-deployment.
+the task definitions and services are registration scaffolding, not a complete
+runnable deployment.
+
+The ECS services are defined in private subnets with `assign_public_ip = false`.
+Before any real apply, the selected VPC must provide private egress through NAT
+or VPC endpoints for ECR image pulls, CloudWatch Logs, and later Secrets
+Manager or SSM access. Without that network path, private Fargate tasks may be
+unable to pull images or reach required AWS APIs.
+
+The services are not ready to run production traffic after apply until a real
+image has been pushed to ECR, secrets/environment wiring is approved, the
+private egress path is confirmed, and apply/deployment approval is granted.
 
 No application task role is defined in this phase because the application does
 not receive runtime AWS API permissions yet. Add an app task role only when a
 later secrets or AWS-integration phase needs scoped runtime permissions.
 
-No VPC, subnet, route table, NAT gateway, ECS cluster, ECS service, autoscaling,
-standalone Secrets Manager resource, deployment workflow, registry login, or
-image push behavior is implemented in this phase.
+No VPC, subnet, route table, NAT gateway, VPC endpoint, autoscaling, standalone
+Secrets Manager resource, deployment workflow, registry login, image push
+behavior, or one-off migration task run path is implemented in this phase.
 
 Existing VPC and subnet IDs are variables only. This scaffold does not use
 Terraform data sources or modules.

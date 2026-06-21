@@ -108,6 +108,28 @@ variable "migration_task_memory" {
   }
 }
 
+variable "api_desired_count" {
+  description = "Desired number of API ECS service tasks. Keep small until runtime secrets, image publishing, and private egress are approved."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.api_desired_count >= 0 && var.api_desired_count == floor(var.api_desired_count)
+    error_message = "api_desired_count must be a non-negative integer."
+  }
+}
+
+variable "worker_desired_count" {
+  description = "Desired number of worker ECS service tasks. Keep small until runtime secrets, image publishing, and private egress are approved."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.worker_desired_count >= 0 && var.worker_desired_count == floor(var.worker_desired_count)
+    error_message = "worker_desired_count must be a non-negative integer."
+  }
+}
+
 variable "ecs_log_retention_days" {
   description = "CloudWatch Logs retention in days for ECS API, worker, and migration task log groups."
   type        = number

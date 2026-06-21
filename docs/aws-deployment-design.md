@@ -12,7 +12,7 @@
 
 This document describes a recommended MVP AWS deployment shape for `transaction-event-gateway`. It is a handoff document for incremental infrastructure phases.
 
-The current Terraform scaffold implements ECR, security groups, the MVP HTTP ALB path, private RDS PostgreSQL, private ElastiCache Redis, ECS Fargate task definitions, task log groups, and a minimal ECS task execution role. It does not define ECS services, autoscaling, an ECS cluster, secrets wiring, deployment workflows, or live deployment behavior.
+The current Terraform scaffold implements ECR, security groups, the MVP HTTP ALB path, private RDS PostgreSQL, private ElastiCache Redis, ECS Fargate task definitions, an ECS cluster, API and worker ECS services, task log groups, and a minimal ECS task execution role. It does not define autoscaling, secrets wiring, deployment workflows, private egress infrastructure, or live deployment behavior.
 
 ## Recommended MVP Architecture
 
@@ -72,7 +72,7 @@ The API and worker should be separate ECS services even though they use the same
 
 ### API Service
 
-- ECS service: `transaction-event-gateway-api`.
+- ECS service: Terraform names this as `{project_name}-{environment}-api`.
 - Image: latest approved image digest or immutable tag from ECR.
 - Command: default image command, currently the API process.
 - Desired count: start with at least 2 tasks for production-like availability; staging may use 1.
@@ -82,7 +82,7 @@ The API and worker should be separate ECS services even though they use the same
 
 ### Worker Service
 
-- ECS service: `transaction-event-gateway-worker`.
+- ECS service: Terraform names this as `{project_name}-{environment}-worker`.
 - Image: same image digest or immutable tag as the API release.
 - Command override: run the worker entrypoint, for example `node dist/worker.js`.
 - Desired count: start with 1 for MVP; increase only after queue depth, lock behavior, and processing latency are observed.
@@ -216,6 +216,8 @@ Gaps to close after MVP:
 
 - The current image default starts the API process; ECS worker and migration tasks need explicit command overrides.
 - The current Terraform task definitions intentionally omit `DATABASE_URL`, `REDIS_URL`, and `WEBHOOK_SECRET` until a dedicated secrets phase wires approved secret sources.
+- The current Terraform ECS services are defined in private subnets with no public IPs, but the scaffold does not create NAT gateways or VPC endpoints. Without private egress to ECR, CloudWatch Logs, and later Secrets Manager or SSM, real Fargate tasks may fail to pull images or reach required AWS APIs.
+- The current Terraform ECS services still require a real ECR image push, approved secrets/environment wiring, network egress review, and apply approval before they can serve production traffic.
 - The migration task command uses the compiled production migration script and still requires approved `DATABASE_URL` secrets wiring before first ECS execution.
 - `LOG_LEVEL` is a deployment design item, but current runtime support should be verified before using it as an operational control.
 - Worker scaling should be conservative until production-like queue behavior and database lock contention are measured.
@@ -233,13 +235,13 @@ Gaps to close after MVP:
 - Sophisticated autoscaling policies.
 - Custom admin panel or manual retry UI.
 - Blockchain provider integration beyond the current signed webhook contract.
-- ECS services, autoscaling, app task roles, secrets wiring, and deployment workflow implementation in the current Terraform scaffold.
+- Autoscaling, app task roles, secrets wiring, private egress infrastructure, and deployment workflow implementation in the current Terraform scaffold.
 - AWS credentials, secrets, or live deployment changes.
 
 ## Handoff Checklist for Infrastructure Phase
 
 - Review the current Terraform scaffold for ECR, security groups, ALB, private RDS PostgreSQL, private ElastiCache Redis, ECS task definitions, task log groups, and ECS task execution IAM.
-- Define ECS cluster, API service, worker service, and the one-off migration task run path.
+- Review the current ECS cluster, API service, and worker service Terraform definitions, then define the one-off migration task run path.
 - Review ElastiCache Redis failover, Multi-AZ, TLS client settings, snapshots, and node sizing before production use.
 - Configure TLS certificate, HTTPS listener, and production ALB hardening.
 - Add least-privilege app task role permissions only when secrets or runtime AWS API access are wired.

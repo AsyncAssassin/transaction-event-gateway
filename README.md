@@ -27,9 +27,9 @@ AWS deployment design for future deployment phases: `docs/aws-deployment-design.
 
 The current Terraform scaffold in `infra/terraform` implements ECR, security
 groups, the MVP HTTP ALB path, a private RDS PostgreSQL instance, private
-ElastiCache Redis, ECS Fargate task definitions, task log groups, and the
-minimal ECS task execution role. It does not define ECS services, autoscaling,
-deployment workflows, or secrets wiring.
+ElastiCache Redis, ECS Fargate task definitions, an ECS cluster, API and worker
+ECS services, task log groups, and the minimal ECS task execution role. It does
+not define autoscaling, deployment workflows, or secrets wiring.
 
 The scaffold is for review and validation only. Do not run Terraform `plan`,
 `apply`, or `destroy` against live AWS without explicit approval.
@@ -38,8 +38,11 @@ RDS master credentials are managed by RDS with
 `manage_master_user_password = true`; no database password value belongs in
 Terraform files or tfvars files. A later ECS/secrets phase must retrieve the
 AWS-managed secret and wire `DATABASE_URL` for the API, worker, and migrations.
-The ECS task definitions also intentionally omit `REDIS_URL` and
-`WEBHOOK_SECRET` until approved secret sources are added.
+The ECS task definitions and services also intentionally omit `REDIS_URL` and
+`WEBHOOK_SECRET` until approved secret sources are added. The services run in
+private subnets with no public IPs, so a real deployment also needs NAT or VPC
+endpoints for ECR, CloudWatch Logs, and later secrets access before tasks can
+reliably start.
 
 Before production use, review deletion protection, backup retention, final
 snapshot behavior, Multi-AZ, storage sizing, Redis TLS/failover settings, and
