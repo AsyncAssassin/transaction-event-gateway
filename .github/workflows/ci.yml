@@ -57,6 +57,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Check Terraform formatting
+        run: terraform -chdir=infra/terraform fmt -check
+
+      - name: Initialize Terraform without backend
+        run: terraform -chdir=infra/terraform init -backend=false
+
+      - name: Validate Terraform scaffold
+        run: terraform -chdir=infra/terraform validate
+
       - name: Typecheck
         run: npm run typecheck
 
