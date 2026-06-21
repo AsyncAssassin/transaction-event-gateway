@@ -119,6 +119,7 @@ npm run lint
 npm test
 npm run test:e2e
 npm run build
+npm run smoke:local
 ```
 
 Local infrastructure and schema verification:
@@ -132,6 +133,12 @@ DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run
 ```
 
 The e2e global setup runs migrations against the configured local PostgreSQL database before the e2e suite starts.
+
+## Local Smoke Check
+
+Use `npm run smoke:local` for a one-command local smoke check once PostgreSQL, Redis, the API process, and the worker process are already running. The script expects migrations to be applied and uses `SMOKE_BASE_URL` when the API is not on `http://localhost:3000`.
+
+The command verifies health, OpenAPI, payment intent idempotency, signed webhook handling, webhook rejection paths, outbox publication, worker completion, and final PostgreSQL state. It creates rows with `smoke_` identifiers and leaves them in place for inspection.
 
 ## Coverage Priorities
 

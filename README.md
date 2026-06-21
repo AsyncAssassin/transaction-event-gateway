@@ -197,9 +197,35 @@ docker compose up -d postgres redis
 npm run test:e2e
 npm run build
 DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run typeorm -- schema:log
+npm run smoke:local
 ```
 
 E2E tests use the configured local PostgreSQL and Redis instances. The e2e global setup runs database migrations before the test suite starts.
+
+### Local Smoke Check
+
+Run the repeatable local smoke check after the API, worker, PostgreSQL, and Redis are already running:
+
+```bash
+docker compose up -d postgres redis
+DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run migration:run
+npm run build
+DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway REDIS_URL=redis://localhost:6379 WEBHOOK_SECRET=test-webhook-secret-value npm run start
+```
+
+In a separate terminal, start the worker with matching environment:
+
+```bash
+DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway REDIS_URL=redis://localhost:6379 WEBHOOK_SECRET=test-webhook-secret-value npm run start:worker
+```
+
+Then run:
+
+```bash
+npm run smoke:local
+```
+
+The smoke script checks health, OpenAPI, payment intent idempotency, signed webhook acceptance, duplicate webhook handling, signature and timestamp rejection, outbox publication, worker processing, and final PostgreSQL state. Set `SMOKE_BASE_URL` to target a non-default API URL.
 
 ## Failure Modes
 
