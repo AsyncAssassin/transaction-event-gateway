@@ -5,7 +5,8 @@
 This directory is an incremental Terraform scaffold for a future AWS MVP
 deployment of `transaction-event-gateway`. It currently defines the ECR
 repository needed to store application images and the minimal security groups
-for future ALB, ECS task, RDS PostgreSQL, and ElastiCache Redis resources. It is
+for future ALB, ECS task, RDS PostgreSQL, and ElastiCache Redis resources, plus
+the MVP HTTP Application Load Balancer path for the future API service. It is
 not ready for `apply` and does not require AWS credentials for formatting or
 validation.
 
@@ -26,7 +27,10 @@ delete live infrastructure in this phase without explicit approval.
   encryption, and a small image retention policy.
 - `security-groups.tf`: security groups and explicit rules for the future ALB,
   ECS tasks, RDS PostgreSQL, and Redis network path.
-- `outputs.tf`: scaffold outputs plus ECR repository and security group IDs.
+- `alb.tf`: internet-facing ALB, HTTP target group, and HTTP listener for the
+  future API service.
+- `outputs.tf`: scaffold outputs plus ECR repository, security group IDs, and
+  ALB values.
 - `example.tfvars`: dummy values for local review. Do not put real secrets here.
 
 ## Planned AWS resource phases
@@ -37,7 +41,7 @@ The resource implementation should continue in small phases after review:
 2. Network path selection: existing VPC inputs first, optional managed VPC later.
 3. IAM roles and CloudWatch log groups.
 4. ECS cluster, API task definition, and API service.
-5. ALB, target group, HTTPS listener, and `/health/ready` health check.
+5. HTTPS listener, ACM certificate, and optional production ALB hardening.
 6. ECS worker task definition and worker service with no inbound traffic.
 7. One-off ECS migration task definition.
 8. RDS PostgreSQL and ElastiCache Redis in private networking.
@@ -59,6 +63,7 @@ The resource implementation should continue in small phases after review:
 | `allowed_http_cidrs` | IPv4 CIDR blocks allowed to reach the future public ALB over HTTP. Defaults to `["0.0.0.0/0"]` as an MVP placeholder. |
 | `app_port` | API container port. Defaults to `3000`. |
 | `alb_port` | Future public ALB HTTP port. Defaults to `80`. |
+| `alb_enable_deletion_protection` | ALB deletion protection switch. Defaults to `false` for this no-apply MVP scaffold. |
 | `postgres_port` | PostgreSQL port for future RDS access. Defaults to `5432`. |
 | `redis_port` | Redis port for future ElastiCache access. Defaults to `6379`. |
 | `health_check_path` | Future ALB health check path. Defaults to `/health/ready`. |
@@ -66,7 +71,7 @@ The resource implementation should continue in small phases after review:
 
 ## Current resource scope
 
-This phase defines only ECR and security group resources:
+This phase defines only ECR, security group, and ALB resources:
 
 - `aws_ecr_repository.app`: application image repository named from
   `local.name_prefix`, with immutable image tags, scan on push, and AES256
@@ -96,13 +101,32 @@ This phase defines only ECR and security group resources:
   from the ECS tasks security group only.
 - `aws_vpc_security_group_ingress_rule.redis_from_ecs_tasks`: allows Redis from
   the ECS tasks security group only.
+- `aws_lb.api`: internet-facing Application Load Balancer in
+  `public_subnet_ids`, using the ALB security group.
+- `aws_lb_target_group.api`: HTTP target group on `app_port` with
+  `target_type = "ip"` for future ECS Fargate API tasks and `/health/ready`
+  health checks.
+- `aws_lb_listener.http`: MVP HTTP listener on `alb_port` that forwards to the
+  future API target group. Until a future ECS service registers targets, the
+  listener can return no-target responses from the empty target group.
 
-No VPC, subnet, route table, NAT gateway, ALB, ECS service, RDS instance,
-ElastiCache cluster, IAM, secrets, CloudWatch, deployment workflow, registry
-login, or image push behavior is implemented in this phase.
+The target group health check uses `/health/ready`. That endpoint checks
+required app configuration, PostgreSQL, and Redis readiness. This intentionally
+favors removing API tasks from ALB rotation when async processing dependencies
+are unhealthy, but it also means Redis incidents can remove API tasks even
+though some durable PostgreSQL-backed writes may still work. See
+`docs/aws-deployment-design.md` for the deployment trade-off.
+
+No VPC, subnet, route table, NAT gateway, ECS service, ECS task definition, RDS
+instance, ElastiCache cluster, IAM, secrets, CloudWatch, deployment workflow,
+registry login, or image push behavior is implemented in this phase.
 
 Existing VPC and subnet IDs are variables only. This scaffold does not use
 Terraform data sources or modules.
+
+The ALB listener is HTTP-only for this MVP scaffold. HTTPS, ACM certificate
+wiring, redirects, WAF, and other production hardening belong to later phases
+after explicit review.
 
 Do not store AWS credentials, account IDs, secret values, real ARNs, database
 URLs, Redis URLs, or webhook secrets in Terraform files or tfvars files.

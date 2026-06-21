@@ -47,3 +47,23 @@ output "redis_security_group_id" {
   description = "ID of the security group intended for the future ElastiCache Redis cluster."
   value       = aws_security_group.redis.id
 }
+
+output "alb_dns_name" {
+  description = "DNS name of the future public API Application Load Balancer."
+  value       = aws_lb.api.dns_name
+}
+
+output "alb_arn" {
+  description = "ARN of the future public API Application Load Balancer."
+  value       = aws_lb.api.arn
+}
+
+output "alb_target_group_arn" {
+  description = "ARN of the HTTP target group intended for future ECS API tasks."
+  value       = aws_lb_target_group.api.arn
+}
+
+output "alb_listener_arn" {
+  description = "ARN of the MVP HTTP listener for the future API ALB."
+  value       = aws_lb_listener.http.arn
+}

@@ -18,11 +18,12 @@ private_subnet_ids = [
   "subnet-ddddddddddddddddd",
 ]
 
-app_port          = 3000
-alb_port          = 80
-postgres_port     = 5432
-redis_port        = 6379
-health_check_path = "/health/ready"
+app_port                       = 3000
+alb_port                       = 80
+alb_enable_deletion_protection = false
+postgres_port                  = 5432
+redis_port                     = 6379
+health_check_path              = "/health/ready"
 
 allowed_http_cidrs = [
   "0.0.0.0/0",

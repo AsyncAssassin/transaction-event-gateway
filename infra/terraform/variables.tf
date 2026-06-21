@@ -111,7 +111,7 @@ variable "app_port" {
 }
 
 variable "alb_port" {
-  description = "Public HTTP port for the future ALB. Defaults to 80 for the MVP security group slice."
+  description = "Public HTTP listener port for the future ALB. Defaults to 80 for the MVP ALB slice."
   type        = number
   default     = 80
 
@@ -119,6 +119,12 @@ variable "alb_port" {
     condition     = var.alb_port >= 1 && var.alb_port <= 65535
     error_message = "alb_port must be between 1 and 65535."
   }
+}
+
+variable "alb_enable_deletion_protection" {
+  description = "Whether to enable deletion protection on the future ALB. Defaults to false for the no-apply MVP scaffold."
+  type        = bool
+  default     = false
 }
 
 variable "postgres_port" {
