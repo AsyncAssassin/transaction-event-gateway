@@ -38,6 +38,18 @@ resource "aws_security_group" "redis" {
   }
 }
 
+resource "aws_security_group" "private_egress_endpoints" {
+  count = var.create_private_egress_endpoints ? 1 : 0
+
+  name        = "${local.name_prefix}-private-egress-vpce"
+  description = "Controls HTTPS access to private VPC interface endpoints."
+  vpc_id      = var.vpc_id
+
+  tags = {
+    Name = "${local.name_prefix}-private-egress-vpce"
+  }
+}
+
 resource "aws_vpc_security_group_ingress_rule" "alb_http" {
   for_each = toset(var.allowed_http_cidrs)
 
@@ -85,13 +97,26 @@ resource "aws_vpc_security_group_egress_rule" "ecs_tasks_to_redis" {
   description                  = "Allow future ECS tasks to reach Redis."
 }
 
-resource "aws_vpc_security_group_egress_rule" "ecs_tasks_to_https" {
-  security_group_id = aws_security_group.ecs_tasks.id
-  cidr_ipv4         = "0.0.0.0/0"
-  from_port         = 443
-  to_port           = 443
-  ip_protocol       = "tcp"
-  description       = "Allow HTTPS egress for required AWS service endpoints."
+resource "aws_vpc_security_group_egress_rule" "ecs_tasks_to_private_egress_endpoints" {
+  count = var.create_private_egress_endpoints ? 1 : 0
+
+  security_group_id            = aws_security_group.ecs_tasks.id
+  referenced_security_group_id = aws_security_group.private_egress_endpoints[0].id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "Allow ECS tasks to reach private VPC interface endpoints over HTTPS."
+}
+
+resource "aws_vpc_security_group_ingress_rule" "private_egress_endpoints_from_ecs_tasks" {
+  count = var.create_private_egress_endpoints ? 1 : 0
+
+  security_group_id            = aws_security_group.private_egress_endpoints[0].id
+  referenced_security_group_id = aws_security_group.ecs_tasks.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "Allow HTTPS from ECS tasks to private VPC interface endpoints."
 }
 
 resource "aws_vpc_security_group_ingress_rule" "rds_from_ecs_tasks" {

@@ -12,7 +12,16 @@ yarn-error.log*
 
 # Terraform local artifacts and per-environment variables
 .terraform/
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/backend.hcl
 *.tfstate
 *.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 *.tfvars
 !example.tfvars

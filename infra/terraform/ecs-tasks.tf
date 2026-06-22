@@ -1,9 +1,65 @@
 locals {
+  ecs_default_environment_variables = {
+    NODE_ENV                            = "production"
+    OUTBOX_DISPATCH_ENABLED             = "true"
+    OUTBOX_DISPATCH_INTERVAL_MS         = "1000"
+    PORT                                = tostring(var.app_port)
+    WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = "300"
+  }
+
+  ecs_runtime_environment_variables = merge(
+    local.ecs_default_environment_variables,
+    var.app_environment_variables,
+  )
+
   ecs_app_environment = [
-    for name in sort(keys(var.app_environment_variables)) : {
+    for name in sort(keys(local.ecs_runtime_environment_variables)) : {
       name  = name
-      value = var.app_environment_variables[name]
+      value = local.ecs_runtime_environment_variables[name]
     }
+  ]
+
+  ecs_api_secrets = [
+    {
+      name      = "DATABASE_URL"
+      valueFrom = aws_secretsmanager_secret.database_url.arn
+    },
+    {
+      name      = "REDIS_URL"
+      valueFrom = aws_secretsmanager_secret.redis_url.arn
+    },
+    {
+      name      = "WEBHOOK_SECRET"
+      valueFrom = aws_secretsmanager_secret.webhook_secret.arn
+    },
+  ]
+
+  ecs_worker_secrets = [
+    {
+      name      = "DATABASE_URL"
+      valueFrom = aws_secretsmanager_secret.database_url.arn
+    },
+    {
+      name      = "REDIS_URL"
+      valueFrom = aws_secretsmanager_secret.redis_url.arn
+    },
+    {
+      name      = "WEBHOOK_SECRET"
+      valueFrom = aws_secretsmanager_secret.webhook_secret.arn
+    },
+  ]
+
+  ecs_migration_secrets = [
+    {
+      name      = "DATABASE_URL"
+      valueFrom = aws_secretsmanager_secret.database_url.arn
+    },
+  ]
+
+  ecs_runtime_secret_arns = [
+    aws_secretsmanager_secret.database_url.arn,
+    aws_secretsmanager_secret.redis_url.arn,
+    aws_secretsmanager_secret.webhook_secret.arn,
   ]
 
   ecs_task_log_group_arns = [
@@ -87,6 +143,14 @@ resource "aws_iam_role_policy" "ecs_task_execution" {
         Resource = aws_ecr_repository.app.arn
       },
       {
+        Sid = "ReadRuntimeSecrets"
+        Action = [
+          "secretsmanager:GetSecretValue",
+        ]
+        Effect   = "Allow"
+        Resource = local.ecs_runtime_secret_arns
+      },
+      {
         Sid = "WriteTaskLogs"
         Action = [
           "logs:CreateLogStream",
@@ -116,6 +180,7 @@ resource "aws_ecs_task_definition" "api" {
       essential   = true
       command     = ["node", "dist/main.js"]
       environment = local.ecs_app_environment
+      secrets     = local.ecs_api_secrets
       portMappings = [
         {
           containerPort = var.app_port
@@ -154,6 +219,7 @@ resource "aws_ecs_task_definition" "worker" {
       essential   = true
       command     = ["node", "dist/worker.js"]
       environment = local.ecs_app_environment
+      secrets     = local.ecs_worker_secrets
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -185,6 +251,7 @@ resource "aws_ecs_task_definition" "migration" {
       essential   = true
       command     = ["npm", "run", "migration:run:prod"]
       environment = local.ecs_app_environment
+      secrets     = local.ecs_migration_secrets
       logConfiguration = {
         logDriver = "awslogs"
         options = {

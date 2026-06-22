@@ -18,6 +18,11 @@ private_subnet_ids = [
   "subnet-ddddddddddddddddd",
 ]
 
+private_route_table_ids = [
+  "rtb-aaaaaaaaaaaaaaaaa",
+  "rtb-bbbbbbbbbbbbbbbbb",
+]
+
 app_port                         = 3000
 alb_port                         = 80
 alb_enable_deletion_protection   = false
@@ -52,14 +57,18 @@ redis_at_rest_encryption_enabled = true
 redis_transit_encryption_enabled = false
 redis_snapshot_retention_limit   = 7
 redis_apply_immediately          = false
+create_private_egress_endpoints  = true
 
 allowed_http_cidrs = [
   "0.0.0.0/0",
 ]
 
 app_environment_variables = {
-  NODE_ENV = "production"
-  PORT     = "3000"
+  NODE_ENV                            = "production"
+  OUTBOX_DISPATCH_ENABLED             = "true"
+  OUTBOX_DISPATCH_INTERVAL_MS         = "1000"
+  PORT                                = "3000"
+  WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = "300"
 }
 
 tags = {

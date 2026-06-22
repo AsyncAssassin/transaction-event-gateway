@@ -4,7 +4,12 @@
 
 This plan keeps implementation incremental and aligned with `docs/architecture.md`. The project has progressed through scaffold, database, payment intents, webhooks, outbox/BullMQ, observability, local operational docs, and an AWS Terraform review scaffold.
 
-The current phase is README and documentation polish. The Terraform scaffold is not a live deployment and still requires approved secrets wiring, private egress review, image publishing, migration execution planning, and explicit apply approval before any AWS use.
+The current AWS documentation/scaffold status covers runtime secrets/env
+wiring, private egress, image publishing, the one-off ECS migration task flow,
+and the deployed smoke test flow. The Terraform scaffold is not a live
+deployment and still requires approved secret value population, private egress
+input review, image publication approval, migration live-run approval, deployed
+smoke approval, and explicit apply approval before any AWS use.
 
 ## Phase 1: Specs
 

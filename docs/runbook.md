@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This runbook covers local and staging-style operation for `transaction-event-gateway`: health checks, state inspection, outbox and worker diagnosis, safe local resets, and log correlation. PostgreSQL is the source of truth; Redis/BullMQ is queue infrastructure.
+This runbook covers local and staging-style operation for `transaction-event-gateway`: health checks, state inspection, outbox and worker diagnosis, safe local resets, and log correlation. PostgreSQL is the source of truth; Redis/BullMQ is queue infrastructure. Future deployed AWS smoke testing is documented separately in [AWS deployed smoke test flow](aws-smoke-test-flow.md) and remains approval-gated.
 
 ## Service Topology
 
@@ -28,6 +28,10 @@ Healthy results:
 - `/health/ready` returns `200` with `checks.config`, `checks.postgres`, and `checks.redis` all `ok`.
 - `docker compose ps` shows PostgreSQL and Redis running and healthy.
 - `npm run smoke:local` passes after PostgreSQL, Redis, the API process, and the worker process are running with matching local environment.
+
+Do not use the local smoke command as a deployed AWS smoke test unless a future
+approved phase explicitly allows that target and its data, credential, and
+evidence boundaries.
 
 ## Database Inspection
 
@@ -186,4 +190,4 @@ If local Redis queue state is suspected, prefer restarting the local Redis conta
 - Metrics dashboards.
 - Alerting.
 - Dead-letter inspection.
-- Deployment runbook.
+- Automated deployment runbook.

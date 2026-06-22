@@ -145,12 +145,9 @@ variable "ecs_log_retention_days" {
 }
 
 variable "app_environment_variables" {
-  description = "Non-secret environment variables injected into ECS task definitions. Do not include database, Redis, webhook, or AWS credential secrets."
+  description = "Additional or overriding non-secret environment variables injected into ECS task definitions. Do not include database, Redis, webhook, or AWS credential secrets."
   type        = map(string)
-  default = {
-    NODE_ENV = "production"
-    PORT     = "3000"
-  }
+  default     = {}
 
   validation {
     condition = alltrue([
@@ -211,6 +208,25 @@ variable "private_subnet_ids" {
     ])
     error_message = "Every private subnet ID must look like subnet- followed by 8 to 17 lowercase hex characters."
   }
+}
+
+variable "private_route_table_ids" {
+  description = "Existing private route table IDs that should receive the S3 gateway endpoint route. Required before an approved apply when private egress endpoints are enabled."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for route_table_id in var.private_route_table_ids : can(regex("^rtb-[0-9a-f]{8,17}$", route_table_id))
+    ])
+    error_message = "Every private route table ID must look like rtb- followed by 8 to 17 lowercase hex characters."
+  }
+}
+
+variable "create_private_egress_endpoints" {
+  description = "Whether to define the preferred private VPC endpoint path for ECS image pulls, task logs, runtime secrets, and ECR S3 layer access. No NAT gateway is created."
+  type        = bool
+  default     = true
 }
 
 variable "allowed_http_cidrs" {

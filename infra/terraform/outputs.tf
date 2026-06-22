@@ -38,6 +38,23 @@ output "ecs_tasks_security_group_id" {
   value       = aws_security_group.ecs_tasks.id
 }
 
+output "private_egress_endpoint_security_group_id" {
+  description = "ID of the security group attached to private VPC interface endpoints, when enabled."
+  value       = try(aws_security_group.private_egress_endpoints[0].id, null)
+}
+
+output "s3_gateway_endpoint_id" {
+  description = "ID of the S3 gateway endpoint used for private ECR layer access, when enabled."
+  value       = try(aws_vpc_endpoint.s3[0].id, null)
+}
+
+output "private_egress_interface_endpoint_ids" {
+  description = "IDs of private interface endpoints for ECR API, ECR Docker, CloudWatch Logs, and Secrets Manager."
+  value = {
+    for name, endpoint in aws_vpc_endpoint.interface : name => endpoint.id
+  }
+}
+
 output "rds_security_group_id" {
   description = "ID of the security group intended for the future RDS PostgreSQL instance."
   value       = aws_security_group.rds.id

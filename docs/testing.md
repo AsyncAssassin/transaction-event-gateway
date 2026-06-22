@@ -140,6 +140,11 @@ Use `npm run smoke:local` for a one-command local smoke check once PostgreSQL, R
 
 The command verifies health, OpenAPI, payment intent idempotency, signed webhook handling, webhook rejection paths, outbox publication, worker completion, and final PostgreSQL state. It creates rows with `smoke_` identifiers and leaves them in place for inspection.
 
+Future deployed AWS smoke testing is documented separately in
+[AWS deployed smoke test flow](aws-smoke-test-flow.md). Keep that flow
+approval-gated and distinct from the local smoke script; no deployed smoke test
+has been run in this documentation phase.
+
 ## Coverage Priorities
 
 Prioritize tests for:
