@@ -1,6 +1,9 @@
 import { QueryFailedError } from 'typeorm';
 
-import { isDatabaseUnavailableError } from './database-error';
+import {
+  findPostgresDataExceptionCode,
+  isDatabaseUnavailableError,
+} from './database-error';
 
 describe('isDatabaseUnavailableError', () => {
   it('detects a node socket connection error', () => {
@@ -103,5 +106,35 @@ describe('isDatabaseUnavailableError', () => {
     expect(isDatabaseUnavailableError('nope')).toBe(false);
     expect(isDatabaseUnavailableError(null)).toBe(false);
     expect(isDatabaseUnavailableError(undefined)).toBe(false);
+  });
+});
+
+describe('findPostgresDataExceptionCode', () => {
+  it('returns the SQLSTATE of a data exception wrapped in a TypeORM QueryFailedError', () => {
+    const driverError = Object.assign(
+      new Error('invalid byte sequence for encoding "UTF8": 0x00'),
+      { code: '22021' },
+    );
+    const error = new QueryFailedError('INSERT ...', [], driverError);
+
+    expect(findPostgresDataExceptionCode(error)).toBe('22021');
+  });
+
+  it('recognizes class 22 codes with letters', () => {
+    const error = Object.assign(new Error('unsupported Unicode escape'), {
+      code: '22P05',
+    });
+
+    expect(findPostgresDataExceptionCode(error)).toBe('22P05');
+  });
+
+  it('ignores other SQLSTATE classes and non-errors', () => {
+    const uniqueViolation = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+    });
+
+    expect(findPostgresDataExceptionCode(uniqueViolation)).toBeUndefined();
+    expect(findPostgresDataExceptionCode('22021')).toBeUndefined();
+    expect(findPostgresDataExceptionCode(null)).toBeUndefined();
   });
 });

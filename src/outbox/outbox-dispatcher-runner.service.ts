@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import { describeError } from '../common/errors/describe-error';
 import {
   StructuredLogger,
   toSafeErrorCode,
@@ -87,6 +88,7 @@ export class OutboxDispatcherRunnerService
         this.logger.warn('outbox_dispatch_runner_failed', {
           status: 'FAILED',
           errorCode: toSafeErrorCode(error, 'OUTBOX_DISPATCH_RUNNER_FAILED'),
+          ...describeError(error),
         });
       })
       .finally(() => {
@@ -106,6 +108,7 @@ export class OutboxDispatcherRunnerService
         this.logger.warn('outbox_reconcile_failed', {
           status: 'FAILED',
           errorCode: toSafeErrorCode(error, 'OUTBOX_RECONCILE_FAILED'),
+          ...describeError(error),
         });
       })
       .finally(() => {

@@ -229,6 +229,62 @@ describe('Outbox dispatcher (e2e)', () => {
     );
   });
 
+  it('stops the batch after a failed publish and leaves the remaining rows for the next run', async () => {
+    const firstWebhookEventId = await insertWebhookEvent(dataSource);
+    const firstOutboxEventId = await insertOutboxEvent(
+      dataSource,
+      firstWebhookEventId,
+    );
+    const secondWebhookEventId = await insertWebhookEvent(dataSource);
+    const secondOutboxEventId = await insertOutboxEvent(
+      dataSource,
+      secondWebhookEventId,
+    );
+    const failingPublisher = {
+      publishProcessWebhookEvent: jest
+        .fn()
+        .mockRejectedValue(new Error('Command timed out')),
+    };
+    const failingDispatcher = new OutboxDispatcherService(
+      dataSource,
+      failingPublisher as unknown as WebhookEventJobPublisher,
+    );
+
+    await expect(failingDispatcher.dispatchBatch()).resolves.toEqual({
+      selected: 2,
+      published: 0,
+      failed: 1,
+    });
+    expect(failingPublisher.publishProcessWebhookEvent).toHaveBeenCalledTimes(
+      1,
+    );
+
+    const rows = (await dataSource.query(
+      `
+        SELECT id, status, attempts
+        FROM outbox_events
+        WHERE id = ANY($1::uuid[])
+      `,
+      [[firstOutboxEventId, secondOutboxEventId]],
+    )) as Array<{ id: string; status: string; attempts: number }>;
+
+    expect(rows.find((row) => row.id === firstOutboxEventId)).toMatchObject({
+      status: 'FAILED',
+      attempts: 1,
+    });
+    expect(rows.find((row) => row.id === secondOutboxEventId)).toMatchObject({
+      status: 'PENDING',
+      attempts: 0,
+    });
+
+    await expect(dispatcher.dispatchBatch()).resolves.toEqual({
+      selected: 1,
+      published: 1,
+      failed: 0,
+    });
+    await expectWebhookStatus(dataSource, secondWebhookEventId, 'QUEUED');
+  });
+
   it('dead-letters a deterministic poison outbox payload without publishing', async () => {
     const webhookEventId = await insertWebhookEvent(dataSource);
     const outboxEventId = await insertOutboxEvent(dataSource, webhookEventId, {

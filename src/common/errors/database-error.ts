@@ -57,6 +57,22 @@ function collectErrorCodes(error: unknown, depth = 0): string[] {
   return codes;
 }
 
+const POSTGRES_DATA_EXCEPTION_PATTERN = /^22[0-9A-Z]{3}$/;
+
+/**
+ * Returns the SQLSTATE of a PostgreSQL data exception (class 22, for example
+ * 22021 for a NUL byte or 22P05 for an unsupported Unicode escape). Such
+ * errors are caused by the submitted values, so the API reports them as a
+ * client error instead of a 500.
+ */
+export function findPostgresDataExceptionCode(
+  error: unknown,
+): string | undefined {
+  return collectErrorCodes(error).find((code) =>
+    POSTGRES_DATA_EXCEPTION_PATTERN.test(code),
+  );
+}
+
 function collectErrorMessages(error: unknown, depth = 0): string[] {
   if (depth > 4 || error === null || typeof error !== 'object') {
     return [];

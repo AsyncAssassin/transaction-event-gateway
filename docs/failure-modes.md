@@ -35,6 +35,21 @@ Protection:
 
 - Canonical request hash comparison under the unique idempotency key.
 
+## Malformed Request Body
+
+Scenario: A request body contains a NUL or another control character, an unpaired UTF-16 surrogate, nesting deeper than 32 levels, or a key such as `__proto__`, `constructor`, or `toString`.
+
+Expected behavior:
+
+- Return `400 Bad Request` with `VALIDATION_ERROR` and a correlation ID before routing; on the webhook route this happens before the signature check.
+- Do not persist anything.
+- If PostgreSQL still rejects a value as invalid data (SQLSTATE class 22), return `400 VALIDATION_ERROR` instead of `500`, and log `http_request_data_exception` with the SQLSTATE in `causeCode`.
+
+Protection:
+
+- A body guard middleware that walks the parsed JSON or urlencoded body iteratively, so deep nesting cannot overflow the call stack.
+- Mapping of PostgreSQL data exceptions in the global exception filter.
+
 ## Invalid Webhook Signature
 
 Scenario: `POST /webhooks/blockchain` has a missing, malformed, or incorrect HMAC signature.
@@ -250,7 +265,7 @@ The main connection pool (10 connections, 5 second connect timeout) sets no quer
 
 ### Redis That Stops Answering
 
-The connection that publishes jobs has no command timeout. A Redis that accepts connections but stops answering blocks the dispatcher's publish call while its transaction holds row locks on the selected outbox rows, and nothing is logged until the connection fails.
+The connection that publishes jobs has a 5 second command timeout, and the first failed publish ends a dispatch batch. A Redis that accepts connections but stops answering therefore fails each publish attempt after about 10 to 15 seconds, including one retry on a recreated queue: the outbox row becomes `FAILED` with backoff, `outbox_dispatch_failed` is logged, and the dispatcher's row locks are released. The worker's blocking connection has no command timeout, which BullMQ requires, so job consumption stalls without a log line until that connection fails or Redis answers again.
 
 ### No Worker Health Signal
 

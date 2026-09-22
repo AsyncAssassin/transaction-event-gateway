@@ -7,7 +7,11 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 
-import { isDatabaseUnavailableError } from '../errors/database-error';
+import {
+  findPostgresDataExceptionCode,
+  isDatabaseUnavailableError,
+} from '../errors/database-error';
+import { describeError } from '../errors/describe-error';
 import { sanitizeErrorMessage } from '../errors/sanitize-error';
 import {
   isSafeErrorCode,
@@ -22,6 +26,7 @@ const logger = new StructuredLogger('HttpException');
 type ResolvedError = {
   status: number;
   body: Record<string, unknown>;
+  dataExceptionCode?: string;
 };
 
 @Catch()
@@ -30,7 +35,7 @@ export class CorrelationIdExceptionFilter implements ExceptionFilter {
     const http = host.switchToHttp();
     const request = http.getRequest<Request>();
     const response = http.getResponse<Response>();
-    const { status, body } = this.resolve(exception);
+    const { status, body, dataExceptionCode } = this.resolve(exception);
 
     const correlationId = resolveCorrelationId(request, response);
     body.correlationId = correlationId;
@@ -41,6 +46,16 @@ export class CorrelationIdExceptionFilter implements ExceptionFilter {
         correlationId,
         status,
         errorCode: resolveLogErrorCode(exception, body),
+        ...describeError(exception),
+      });
+    } else if (dataExceptionCode) {
+      // Request validation should have rejected the value before PostgreSQL
+      // did, so keep a trace of which SQLSTATE got through.
+      logger.warn('http_request_data_exception', {
+        correlationId,
+        status,
+        errorCode: 'DATABASE_DATA_EXCEPTION',
+        causeCode: dataExceptionCode,
       });
     }
 
@@ -76,6 +91,18 @@ export class CorrelationIdExceptionFilter implements ExceptionFilter {
           error: 'SERVICE_UNAVAILABLE',
           message: 'A required datastore is temporarily unavailable.',
         },
+      };
+    }
+
+    const dataExceptionCode = findPostgresDataExceptionCode(exception);
+    if (dataExceptionCode) {
+      return {
+        status: HttpStatus.BAD_REQUEST,
+        body: {
+          error: 'VALIDATION_ERROR',
+          message: 'Request could not be processed.',
+        },
+        dataExceptionCode,
       };
     }
 
