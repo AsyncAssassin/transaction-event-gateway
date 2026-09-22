@@ -194,10 +194,10 @@ Health endpoints:
 docker compose up --build
 ```
 
-The API listens on `http://localhost:3000`; the API and worker restart automatically unless stopped. The stack uses the placeholder webhook secret from `docker-compose.yml`, so the smoke script must sign with the same value:
+The API listens on `http://localhost:3000`; the API and worker restart automatically unless stopped. Compose publishes the API, PostgreSQL, and Redis ports on `127.0.0.1` only. The Compose services, `.env.example`, and the smoke script share the local webhook secret `local-development-placeholder-secret`, so the smoke check needs no extra variables:
 
 ```bash
-WEBHOOK_SECRET=local-development-placeholder-secret npm run smoke:local
+npm run smoke:local
 ```
 
 Stop the containerized API and worker with `docker compose stop api worker` before running them from `dist/` on the same port.
@@ -262,7 +262,7 @@ header = X-Webhook-Signature: v1=<hex_signature>
 Generate a compact local request:
 
 ```bash
-export WEBHOOK_SECRET='<WEBHOOK_SECRET>'
+export WEBHOOK_SECRET=local-development-placeholder-secret
 body='{"eventId":"evt_local_001","type":"transaction.confirmed","paymentIntentId":"<PAYMENT_INTENT_UUID>","txHash":"0xtest123","amount":"125.50","asset":"USDC"}'
 timestamp="$(date +%s)"
 nonce="nonce_${timestamp}"
@@ -331,14 +331,14 @@ npm run typecheck
 npm run lint
 npm run format:check
 npm test
+docker compose stop api worker
 docker compose up -d postgres redis
 npm run test:e2e
 npm run build
-DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run typeorm -- schema:log
-npm run smoke:local
+DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway bash scripts/check-schema-drift.sh
 ```
 
-E2E tests use the configured local PostgreSQL and Redis instances. The e2e global setup runs database migrations before the test suite starts.
+E2E tests use the configured local PostgreSQL and Redis instances, and the e2e global setup runs database migrations first. Stop the Compose `api` and `worker` services before `npm run test:e2e`: the suite truncates the tables of the local database, and its global setup refuses to start while another BullMQ worker is consuming the queue. The smoke check below needs a running stack.
 
 Dependabot opens grouped weekly pull requests for npm dependencies and GitHub Actions (`.github/dependabot.yml`); NestJS packages are grouped so they always move together, and major versions are upgraded manually.
 
@@ -350,13 +350,13 @@ Run the repeatable local smoke check after the API, worker, PostgreSQL, and Redi
 docker compose up -d postgres redis
 DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run migration:run
 npm run build
-DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway REDIS_URL=redis://localhost:6379 WEBHOOK_SECRET=test-webhook-secret-value npm run start
+DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway REDIS_URL=redis://localhost:6379 WEBHOOK_SECRET=local-development-placeholder-secret npm run start
 ```
 
 In a separate terminal, start the worker with matching environment:
 
 ```bash
-DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway REDIS_URL=redis://localhost:6379 WEBHOOK_SECRET=test-webhook-secret-value npm run start:worker
+DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway REDIS_URL=redis://localhost:6379 WEBHOOK_SECRET=local-development-placeholder-secret npm run start:worker
 ```
 
 Then run:

@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_URL="${SMOKE_BASE_URL:-${BASE_URL:-http://localhost:3000}}"
 BASE_URL="${BASE_URL%/}"
-WEBHOOK_SECRET="${WEBHOOK_SECRET:-test-webhook-secret-value}"
+WEBHOOK_SECRET="${WEBHOOK_SECRET:-local-development-placeholder-secret}"
 SMOKE_TIMEOUT_SECONDS="${SMOKE_TIMEOUT_SECONDS:-20}"
 SMOKE_POSTGRES_SERVICE="${SMOKE_POSTGRES_SERVICE:-postgres}"
 SMOKE_POSTGRES_USER="${SMOKE_POSTGRES_USER:-app}"

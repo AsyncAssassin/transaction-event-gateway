@@ -134,7 +134,7 @@ If outbox rows are stuck:
 The worker must run separately from the API:
 
 ```bash
-DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway REDIS_URL=redis://localhost:6379 WEBHOOK_SECRET=test-webhook-secret-value npm run start:worker
+DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway REDIS_URL=redis://localhost:6379 WEBHOOK_SECRET=local-development-placeholder-secret npm run start:worker
 ```
 
 Worker jobs contain only `webhookEventId`, so the worker reloads durable state from PostgreSQL. Duplicate jobs should be safe because processing locks the webhook row and exits successfully if the event is already `PROCESSED`.
