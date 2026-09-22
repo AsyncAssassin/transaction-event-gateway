@@ -15,7 +15,7 @@
 - The service owns payment intent state and is the authoritative system for local payment processing status.
 - External blockchain or payment provider events are represented by a mocked webhook provider.
 - PostgreSQL is the durable source of truth for business state, idempotency, webhook inbox records, and outbox records.
-- Redis is used for BullMQ and optional short-lived operational caches only.
+- Redis is used for BullMQ only; no application cache or lock lives in Redis.
 - Correctness must not depend on Redis TTLs, in-memory locks, or queue uniqueness alone.
 - Payment intent creation normally happens before a corresponding external confirmation event arrives.
 - Webhook payloads may be duplicated, retried, delayed, or delivered out of order.
@@ -76,11 +76,11 @@ Worker
 
 Key components:
 
-- **API process**: handles REST requests, validation, idempotency checks, webhook verification, and durable writes.
+- **API process**: handles REST requests, validation, idempotency checks, webhook verification, and durable writes. It does not hold a BullMQ connection; the outbox is a PostgreSQL table it writes to, and only the `/health/ready` probe touches Redis.
 - **Worker process**: handles BullMQ jobs and applies webhook events to payment intent state.
 - **Outbox dispatcher**: bridges committed database state to BullMQ publication.
 - **PostgreSQL**: stores all authoritative business and processing state.
-- **Redis**: backs BullMQ and optional operational caches.
+- **Redis**: backs BullMQ only.
 
 ## Sequence Flows
 
@@ -191,49 +191,81 @@ sequenceDiagram
 ```text
 src/
   app.module.ts
+  main.ts
+  worker.ts
+  common/
+    bootstrap.ts
+    canonicalization/
+      canonical-json.ts
+    errors/
+      database-error.ts
+      sanitize-error.ts
+    logging/
+      http-request-logging.middleware.ts
+      structured-logger.ts
+    request-context/
+      correlation-id-exception.filter.ts
+      correlation-id.middleware.ts
+      request-context.ts
+    validation/
+      validation-error-response.ts
   config/
     config.module.ts
     env.validation.ts
   database/
+    data-source.ts
+    database-url.validation.ts
     database.module.ts
-    migrations/
-  common/
-    errors/
-    logging/
-    validation/
-    request-context/
+    typeorm-options.ts
+    entities/
+      idempotency-record.entity.ts
+      index.ts
+      outbox-event.entity.ts
+      payment-intent.entity.ts
+      webhook-event.entity.ts
+      webhook-processing-attempt.entity.ts
   health/
     health.controller.ts
+    health.module.ts
     health.service.ts
-  payment-intents/
-    payment-intents.module.ts
-    payment-intents.controller.ts
-    payment-intents.service.ts
-    payment-intent.entity.ts
-    idempotency-record.entity.ts
-    dto/
-  webhooks/
-    webhooks.module.ts
-    webhooks.controller.ts
-    webhook-security.service.ts
-    webhook-events.service.ts
-    webhook-event.entity.ts
-    dto/
+    postgres-health-check.service.ts
+    redis-health-check.service.ts
   outbox/
-    outbox.module.ts
-    outbox.entity.ts
+    outbox-dispatcher-runner.service.ts
     outbox-dispatcher.service.ts
+    outbox.module.ts
+  payment-intents/
+    payment-intents.controller.ts
+    payment-intents.module.ts
+    payment-intents.service.ts
+    payment-intents.types.ts
+    dto/
+      create-payment-intent.dto.ts
+    validation/
+      payment-amount.validator.ts
   processing/
     processing.module.ts
+    queue.constants.ts
     queues.module.ts
-    webhook-events.processor.ts
-    job-publisher.service.ts
-    manual-retry.controller.ts
-    webhook-processing-attempt.entity.ts
-  observability/
-    metrics.module.ts
-    logger.module.ts
+    redis-options.ts
+    webhook-event-job-publisher.service.ts
+    webhook-event-processor.service.ts
+    webhook-events-queue-holder.service.ts
+    webhook-events-worker.service.ts
+    worker.module.ts
+  webhooks/
+    webhook-events.service.ts
+    webhooks.controller.ts
+    webhooks.module.ts
+    webhooks.types.ts
+    dto/
+      blockchain-webhook.dto.ts
+    security/
+      webhook-signature.ts
+      webhook-timestamp.ts
 ```
+
+Unit specs (`*.spec.ts`) sit next to the code they cover and are omitted above; e2e specs live in `test/`, and TypeORM migrations live in `migrations/` at the repository root. `main.ts` boots the HTTP API and `worker.ts` boots the standalone worker context; both import `AppConfigModule` for fail-fast environment validation.
 
 Module responsibilities:
 
@@ -1211,13 +1243,9 @@ postgres
 
 redis
   Redis instance for BullMQ
-
-prometheus
-  Optional metrics scraper
-
-grafana
-  Optional dashboards
 ```
+
+Metrics scraping and dashboards are not part of the Compose stack; they remain a deferred extension.
 
 The MVP requires `api`, `worker`, `postgres`, and `redis`.
 
@@ -1225,35 +1253,62 @@ The MVP requires `api`, `worker`, `postgres`, and `redis`.
 
 ```text
 transaction-event-gateway/
+  .github/workflows/ci.yml
   docs/
-    architecture.md
     api.md
+    architecture.md
+    aws-deploy-guardrails.md
+    aws-deployment-design.md
+    aws-migration-task-flow.md
+    aws-short-lived-deploy-runbook.md
+    aws-smoke-test-flow.md
     database.md
+    domain-state-machine.md
+    ecr-image-publishing.md
     failure-modes.md
+    implementation-plan.md
+    runbook.md
+    testing.md
+    assets/
+  infra/terraform/
+  migrations/
+    1781850000000-CreateDatabaseFoundation.ts
+    1783000000000-AddOutboxDeadAt.ts
+  scripts/
+    check-schema-drift.sh
+    smoke-local.sh
   src/
     app.module.ts
     main.ts
     worker.ts
+    common/
     config/
     database/
-    common/
     health/
-    payment-intents/
-    webhooks/
     outbox/
+    payment-intents/
     processing/
-    observability/
+    webhooks/
   test/
-    unit/
-    integration/
-    e2e/
-  migrations/
-  docker/
+    jest-e2e.config.js
+    e2e-global-setup.ts
+    jest.setup.ts
+    test-env.ts
+    app.e2e-spec.ts
+    outbox-runner.e2e-spec.ts
+    outbox.e2e-spec.ts
+    payment-intents.e2e-spec.ts
+    rate-limit.e2e-spec.ts
+    webhooks.e2e-spec.ts
+    worker-bullmq.e2e-spec.ts
+    worker-processing.e2e-spec.ts
+  .env.example
+  .nvmrc
   docker-compose.yml
   Dockerfile
+  jest.config.js
   package.json
   README.md
-  .env.example
 ```
 
 ## MVP Scope

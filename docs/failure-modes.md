@@ -126,6 +126,7 @@ Expected behavior:
 
 - Payment intent creation can still operate.
 - Webhook acceptance can still persist inbox and outbox records.
+- The API process holds no BullMQ connection, so a Redis outage produces no queue reconnect noise in API logs; only the `/health/ready` probe reports it.
 - Outbox dispatch records transient failures as retryable `FAILED` rows with capped `next_attempt_at`, sanitized `last_error`, and `dead_at` unset; retries continue until Redis recovers.
 - `/health/ready` (config, PostgreSQL, Redis) reports unavailable, but `/health/serving` (config and PostgreSQL only) stays healthy. The load balancer uses `/health/serving`, so API tasks are not drained and keep serving payment intent creation and webhook acceptance during a Redis incident.
 

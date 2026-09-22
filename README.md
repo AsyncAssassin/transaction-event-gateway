@@ -43,7 +43,7 @@ Production-style NestJS backend for idempotent payment intents, signed webhook i
 
 The service runs as two processes from the same codebase:
 
-- **API process**: exposes REST endpoints, validates requests, verifies webhook signatures, writes durable state, and serves Swagger plus health endpoints.
+- **API process**: exposes REST endpoints, validates requests, verifies webhook signatures, writes durable state, and serves Swagger plus health endpoints. It opens no BullMQ connection; only the `/health/ready` probe touches Redis.
 - **Worker process**: runs the outbox dispatcher and BullMQ consumer for accepted webhook events.
 
 PostgreSQL is the source of truth for payment intents, idempotency records, webhook inbox rows, outbox rows, and processing attempts. Redis is queue infrastructure only; correctness does not depend on Redis locks, TTLs, or queue uniqueness.
