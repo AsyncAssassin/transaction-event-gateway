@@ -14,6 +14,7 @@ import { OutboxDispatcherService } from './outbox-dispatcher.service';
 const DEFAULT_OUTBOX_DISPATCH_INTERVAL_MS = 1_000;
 const RUNNER_BACKOFF_BASE_MS = 1_000;
 const RUNNER_BACKOFF_MAX_MS = 30_000;
+const OUTBOX_RECONCILE_INTERVAL_MS = 60_000;
 
 @Injectable()
 export class OutboxDispatcherRunnerService
@@ -23,7 +24,9 @@ export class OutboxDispatcherRunnerService
     OutboxDispatcherRunnerService.name,
   );
   private timer: ReturnType<typeof setInterval> | null = null;
+  private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private inFlightDispatch: Promise<void> | null = null;
+  private inFlightReconcile: Promise<void> | null = null;
   private consecutiveFailures = 0;
   private cooldownUntilMs = 0;
 
@@ -40,6 +43,11 @@ export class OutboxDispatcherRunnerService
     const intervalMs = this.getIntervalMs();
     this.timer = setInterval(() => this.dispatchOnce(), intervalMs);
     this.timer.unref?.();
+    this.reconcileTimer = setInterval(
+      () => this.reconcileOnce(),
+      OUTBOX_RECONCILE_INTERVAL_MS,
+    );
+    this.reconcileTimer.unref?.();
   }
 
   async onApplicationShutdown(): Promise<void> {
@@ -48,7 +56,12 @@ export class OutboxDispatcherRunnerService
       this.timer = null;
     }
 
-    await this.inFlightDispatch;
+    if (this.reconcileTimer) {
+      clearInterval(this.reconcileTimer);
+      this.reconcileTimer = null;
+    }
+
+    await Promise.all([this.inFlightDispatch, this.inFlightReconcile]);
   }
 
   private dispatchOnce(): void {
@@ -78,6 +91,25 @@ export class OutboxDispatcherRunnerService
       })
       .finally(() => {
         this.inFlightDispatch = null;
+      });
+  }
+
+  private reconcileOnce(): void {
+    if (this.inFlightReconcile) {
+      return;
+    }
+
+    this.inFlightReconcile = this.dispatcher
+      .reconcileStalePublishedEvents()
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        this.logger.warn('outbox_reconcile_failed', {
+          status: 'FAILED',
+          errorCode: toSafeErrorCode(error, 'OUTBOX_RECONCILE_FAILED'),
+        });
+      })
+      .finally(() => {
+        this.inFlightReconcile = null;
       });
   }
 

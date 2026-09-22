@@ -63,12 +63,25 @@ export class WebhookEventsWorkerService
     );
 
     this.worker.on('failed', (job, error) => {
+      const errorCode = toSafeErrorCode(error, 'WORKER_JOB_FAILED');
+
       this.logger.warn('worker_job_failed', {
         jobId: normalizeJobId(job?.id),
         webhookEventId: job?.data.webhookEventId,
         status: 'FAILED',
-        errorCode: toSafeErrorCode(error, 'WORKER_JOB_FAILED'),
+        errorCode,
       });
+
+      // BullMQ gives up after the last attempt and the webhook event stays
+      // QUEUED; the outbox reconciler republishes it later.
+      if (job && hasExhaustedAttempts(job)) {
+        this.logger.warn('worker_job_exhausted', {
+          jobId: normalizeJobId(job.id),
+          webhookEventId: job.data.webhookEventId,
+          status: 'FAILED',
+          errorCode,
+        });
+      }
     });
     this.worker.on('error', (error) => this.handleWorkerError(error));
     this.worker.on('ready', () => this.handleWorkerReady());
@@ -136,6 +149,14 @@ export class WebhookEventsWorkerService
       suppressedCount,
     });
   }
+}
+
+// BullMQ increments attemptsMade before emitting 'failed', so the final
+// attempt reports attemptsMade equal to the configured attempts.
+export function hasExhaustedAttempts(
+  job: Pick<Job, 'attemptsMade' | 'opts'>,
+): boolean {
+  return job.attemptsMade >= (job.opts.attempts ?? 1);
 }
 
 function normalizeJobId(

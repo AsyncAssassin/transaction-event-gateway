@@ -5,7 +5,10 @@ import { DataSource } from 'typeorm';
 
 import { AppConfigModule } from '../src/config/config.module';
 import { DatabaseModule } from '../src/database/database.module';
-import { OutboxDispatcherService } from '../src/outbox/outbox-dispatcher.service';
+import {
+  DEFAULT_STALE_PUBLISHED_AFTER_MS,
+  OutboxDispatcherService,
+} from '../src/outbox/outbox-dispatcher.service';
 import { OutboxModule } from '../src/outbox/outbox.module';
 import {
   ProcessWebhookEventJobData,
@@ -353,6 +356,178 @@ describe('Outbox dispatcher (e2e)', () => {
     expect(rows[0]?.publishedAt).toBeInstanceOf(Date);
     await expectWebhookStatus(dataSource, webhookEventId, 'QUEUED');
   });
+
+  it('hands stale PUBLISHED rows of unfinished webhook events back to the dispatcher', async () => {
+    const queuedWebhookEventId = await insertWebhookEvent(dataSource, 'QUEUED');
+    const receivedWebhookEventId = await insertWebhookEvent(
+      dataSource,
+      'RECEIVED',
+    );
+    const outboxEventIds = [
+      await insertPublishedOutboxEvent(
+        dataSource,
+        queuedWebhookEventId,
+        '11 minutes',
+      ),
+      await insertPublishedOutboxEvent(
+        dataSource,
+        receivedWebhookEventId,
+        '11 minutes',
+      ),
+    ];
+
+    // No BullMQ job exists for either event, as after a Redis data loss or
+    // after the job exhausted its attempts.
+    await expect(dispatcher.reconcileStalePublishedEvents()).resolves.toEqual({
+      requeued: 2,
+    });
+
+    const requeuedRows = (await dataSource.query(
+      `
+        SELECT
+          status,
+          attempts,
+          dead_at AS "deadAt",
+          last_error AS "lastError",
+          next_attempt_at <= now() AS "due"
+        FROM outbox_events
+        WHERE id = ANY($1::uuid[])
+      `,
+      [outboxEventIds],
+    )) as Array<Record<string, unknown>>;
+
+    expect(requeuedRows).toEqual([
+      {
+        status: 'FAILED',
+        attempts: 0,
+        deadAt: null,
+        lastError: 'STALE_PUBLISHED_WEBHOOK_REQUEUED',
+        due: true,
+      },
+      {
+        status: 'FAILED',
+        attempts: 0,
+        deadAt: null,
+        lastError: 'STALE_PUBLISHED_WEBHOOK_REQUEUED',
+        due: true,
+      },
+    ]);
+
+    await expect(dispatcher.dispatchBatch()).resolves.toEqual({
+      selected: 2,
+      published: 2,
+      failed: 0,
+    });
+
+    const republishedRows = (await dataSource.query(
+      `
+        SELECT
+          status,
+          last_error AS "lastError",
+          published_at > now() - interval '1 minute' AS "freshlyPublished"
+        FROM outbox_events
+        WHERE id = ANY($1::uuid[])
+      `,
+      [outboxEventIds],
+    )) as Array<Record<string, unknown>>;
+
+    expect(republishedRows).toEqual([
+      { status: 'PUBLISHED', lastError: null, freshlyPublished: true },
+      { status: 'PUBLISHED', lastError: null, freshlyPublished: true },
+    ]);
+    await expectWebhookStatus(dataSource, queuedWebhookEventId, 'QUEUED');
+    await expectWebhookStatus(dataSource, receivedWebhookEventId, 'QUEUED');
+
+    const jobs = await queue.getJobs(['waiting', 'delayed']);
+    expect(jobs.map((job) => job.data.webhookEventId).sort()).toEqual(
+      [queuedWebhookEventId, receivedWebhookEventId].sort(),
+    );
+  });
+
+  it('leaves recently published, finished, and unpublished outbox rows alone', async () => {
+    const recentWebhookEventId = await insertWebhookEvent(dataSource, 'QUEUED');
+    await insertPublishedOutboxEvent(
+      dataSource,
+      recentWebhookEventId,
+      '1 minute',
+    );
+    const processedWebhookEventId = await insertWebhookEvent(
+      dataSource,
+      'PROCESSED',
+    );
+    await insertPublishedOutboxEvent(
+      dataSource,
+      processedWebhookEventId,
+      '11 minutes',
+    );
+    const failedWebhookEventId = await insertWebhookEvent(dataSource, 'FAILED');
+    await insertPublishedOutboxEvent(
+      dataSource,
+      failedWebhookEventId,
+      '11 minutes',
+    );
+    const pendingWebhookEventId = await insertWebhookEvent(dataSource);
+    await insertOutboxEvent(dataSource, pendingWebhookEventId);
+
+    await expect(dispatcher.reconcileStalePublishedEvents()).resolves.toEqual({
+      requeued: 0,
+    });
+
+    const rows = (await dataSource.query(
+      `
+        SELECT status, count(*)::int AS "count"
+        FROM outbox_events
+        WHERE last_error IS NULL
+        GROUP BY status
+        ORDER BY status
+      `,
+    )) as Array<{ status: string; count: number }>;
+
+    expect(rows).toEqual([
+      { status: 'PENDING', count: 1 },
+      { status: 'PUBLISHED', count: 3 },
+    ]);
+  });
+
+  it('requeues at most the batch size per run and never the same row twice across concurrent runs', async () => {
+    const webhookEventIds: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const webhookEventId = await insertWebhookEvent(dataSource, 'QUEUED');
+      await insertPublishedOutboxEvent(
+        dataSource,
+        webhookEventId,
+        '11 minutes',
+      );
+      webhookEventIds.push(webhookEventId);
+    }
+
+    await expect(
+      dispatcher.reconcileStalePublishedEvents(
+        DEFAULT_STALE_PUBLISHED_AFTER_MS,
+        2,
+      ),
+    ).resolves.toEqual({ requeued: 2 });
+
+    const concurrentRuns = await Promise.all([
+      dispatcher.reconcileStalePublishedEvents(),
+      dispatcher.reconcileStalePublishedEvents(),
+    ]);
+    expect(concurrentRuns.reduce((total, run) => total + run.requeued, 0)).toBe(
+      3,
+    );
+
+    const rows = (await dataSource.query(
+      `
+        SELECT status, count(*)::int AS "count"
+        FROM outbox_events
+        WHERE aggregate_id = ANY($1::uuid[])
+        GROUP BY status
+      `,
+      [webhookEventIds],
+    )) as Array<{ status: string; count: number }>;
+
+    expect(rows).toEqual([{ status: 'FAILED', count: 5 }]);
+  });
 });
 
 async function insertRetryableFailedOutboxEvent(
@@ -396,7 +571,10 @@ async function insertRetryableFailedOutboxEvent(
   return outboxEventId;
 }
 
-async function insertWebhookEvent(dataSource: DataSource): Promise<string> {
+async function insertWebhookEvent(
+  dataSource: DataSource,
+  status = 'RECEIVED',
+): Promise<string> {
   const webhookEventId = randomUUID();
   const paymentIntentId = randomUUID();
   const payload = {
@@ -433,7 +611,7 @@ async function insertWebhookEvent(dataSource: DataSource): Promise<string> {
         $5,
         $6::jsonb,
         $7,
-        'RECEIVED',
+        $8,
         now()
       )
     `,
@@ -445,6 +623,7 @@ async function insertWebhookEvent(dataSource: DataSource): Promise<string> {
       payload.txHash,
       JSON.stringify(payload),
       `hash_${webhookEventId}`,
+      status,
     ],
   );
 
@@ -478,6 +657,45 @@ async function insertOutboxEvent(
       )
     `,
     [outboxEventId, webhookEventId, JSON.stringify(payload)],
+  );
+
+  return outboxEventId;
+}
+
+async function insertPublishedOutboxEvent(
+  dataSource: DataSource,
+  webhookEventId: string,
+  publishedAgo: string,
+): Promise<string> {
+  const outboxEventId = randomUUID();
+
+  await dataSource.query(
+    `
+      INSERT INTO outbox_events (
+        id,
+        type,
+        aggregate_type,
+        aggregate_id,
+        payload,
+        status,
+        published_at
+      )
+      VALUES (
+        $1,
+        'process-webhook-event',
+        'webhook_event',
+        $2,
+        $3::jsonb,
+        'PUBLISHED',
+        now() - $4::interval
+      )
+    `,
+    [
+      outboxEventId,
+      webhookEventId,
+      JSON.stringify({ webhookEventId }),
+      publishedAgo,
+    ],
   );
 
   return outboxEventId;

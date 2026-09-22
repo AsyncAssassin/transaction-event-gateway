@@ -146,7 +146,7 @@ Correctness rationale:
 - Unique provider nonce prevents durable nonce replay when the provider supplies a nonce.
 - Payload hash supports conflict detection for reused event IDs.
 - No foreign key is used for `payment_intent_id` in the MVP so a valid signed event that references an unknown payment intent can still be durably recorded and later marked `FAILED` by the worker.
-- Status and received time index supports dispatch, retry, and monitoring queries.
+- The status and received time index lets the outbox reconciler find unfinished (`RECEIVED` or `QUEUED`) events cheaply, and serves monitoring queries.
 - Transaction hash index supports reconciliation and duplicate transaction investigation.
 
 ### outbox_events
@@ -265,6 +265,7 @@ Dispatcher operation should:
 - Mark the outbox row `PUBLISHED` after publication succeeds.
 - Record attempts, next retry time, and sanitized errors when transient publication fails.
 - Mark deterministic poison outbox payloads `FAILED` with `dead_at` instead of retrying them.
+- Every 60 seconds, return `PUBLISHED` rows that were published more than 10 minutes ago and whose webhook event is still `RECEIVED` or `QUEUED` to `FAILED` with `next_attempt_at = now()`, so that a job lost from Redis or out of attempts is published again. This is a single `UPDATE ... FROM` over at most 100 rows with `FOR UPDATE SKIP LOCKED`, joined through `outbox_events_aggregate_idx`.
 
 Publishing to Redis and updating PostgreSQL is not atomic across systems, so duplicate publication must remain safe.
 
@@ -281,7 +282,7 @@ One transaction must include:
 - Mark webhook event `PROCESSED` or durable `FAILED`.
 - Insert a `webhook_processing_attempts` row.
 
-If the worker crashes before commit, PostgreSQL rolls back the state changes and BullMQ retries.
+If the worker crashes before commit, PostgreSQL rolls back the state changes and BullMQ retries. If every attempt fails, the event stays `QUEUED` until the outbox reconciliation publishes it again.
 
 ## Rollback Notes
 
