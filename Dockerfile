@@ -15,6 +15,8 @@ RUN npm prune --omit=dev
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# Keep npm (used only by the one-off migration command) from printing update banners.
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

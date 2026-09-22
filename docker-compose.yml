@@ -15,7 +15,7 @@ services:
     build:
       context: .
     image: transaction-event-gateway:local
-    command: ["npm", "run", "start"]
+    command: ["node", "dist/main.js"]
     environment:
       NODE_ENV: development
       PORT: 3000
@@ -38,7 +38,7 @@ services:
     build:
       context: .
     image: transaction-event-gateway:local
-    command: ["npm", "run", "start:worker"]
+    command: ["node", "dist/worker.js"]
     environment:
       NODE_ENV: development
       PORT: 3000
