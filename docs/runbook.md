@@ -127,6 +127,7 @@ If outbox rows are stuck:
 - Check `next_attempt_at` for failed rows that are waiting for backoff.
 - Check `attempts`, `next_attempt_at`, and `last_error` to distinguish active capped-backoff retry from a quiet dispatcher.
 - Check worker logs for `outbox_dispatch_failed`, `outbox_dispatch_poisoned`, `webhook_events_queue_poisoned`, or `outbox_dispatch_runner_failed`.
+- Repeated Redis connection errors are summarized, not streamed: `worker_error` and `webhook_events_queue_poisoned` appear once per error code per 30 seconds with a `suppressedCount`, and `worker_redis_recovered` or `webhook_events_queue_recovered` marks the end of the outage.
 - Remember webhook acceptance writes `webhook_events` and `outbox_events`; it does not publish directly to BullMQ.
 
 ## Worker Troubleshooting

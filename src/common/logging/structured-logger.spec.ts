@@ -1,6 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 
-import { createStructuredLogEntry, toSafeErrorCode } from './structured-logger';
+import {
+  createStructuredLogEntry,
+  isSafeErrorCode,
+  toSafeErrorCode,
+} from './structured-logger';
 
 describe('structured logging helpers', () => {
   it('keeps only approved scalar log fields', () => {
@@ -41,5 +45,24 @@ describe('structured logging helpers', () => {
     expect(
       toSafeErrorCode(new Error('redis password leaked'), 'FALLBACK'),
     ).toBe('FALLBACK');
+  });
+
+  it('keeps numeric suppressedCount so throttled warnings stay measurable', () => {
+    expect(
+      createStructuredLogEntry('worker_error', {
+        errorCode: 'ECONNREFUSED',
+        suppressedCount: 12,
+      }),
+    ).toEqual({
+      event: 'worker_error',
+      errorCode: 'ECONNREFUSED',
+      suppressedCount: 12,
+    });
+  });
+
+  it('recognizes stable error codes and rejects free-form text', () => {
+    expect(isSafeErrorCode('SERVICE_UNAVAILABLE')).toBe(true);
+    expect(isSafeErrorCode('Internal Server Error')).toBe(false);
+    expect(isSafeErrorCode(undefined)).toBe(false);
   });
 });

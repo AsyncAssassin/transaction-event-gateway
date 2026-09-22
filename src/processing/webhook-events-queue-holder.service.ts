@@ -2,6 +2,7 @@ import { Inject, Injectable, OnModuleDestroy, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue, QueueOptions } from 'bullmq';
 
+import { LogThrottle } from '../common/logging/log-throttle';
 import {
   StructuredLogger,
   toSafeErrorCode,
@@ -23,11 +24,19 @@ export const WEBHOOK_EVENTS_QUEUE_FACTORY = Symbol(
   'WEBHOOK_EVENTS_QUEUE_FACTORY',
 );
 
+// A Redis outage raises one connection error per reconnect attempt on every
+// Queue instance, so identical poison warnings are summarized once per interval.
+const QUEUE_POISON_LOG_INTERVAL_MS = 30_000;
+
 @Injectable()
 export class WebhookEventsQueueHolder implements OnModuleDestroy {
   private readonly logger = new StructuredLogger(WebhookEventsQueueHolder.name);
+  private readonly poisonThrottle = new LogThrottle(
+    QUEUE_POISON_LOG_INTERVAL_MS,
+  );
   private currentQueue: Queue<ProcessWebhookEventJobData> | null = null;
   private poisoned = false;
+  private poisonedSinceLastPublish = false;
   private recreatePromise: Promise<Queue<ProcessWebhookEventJobData>> | null =
     null;
   private destroyed = false;
@@ -54,6 +63,7 @@ export class WebhookEventsQueueHolder implements OnModuleDestroy {
 
     try {
       await addProcessWebhookEvent(firstQueue, webhookEventId);
+      this.markPublishSucceeded();
       return;
     } catch (error) {
       this.markPoisoned(firstQueue, error);
@@ -64,6 +74,7 @@ export class WebhookEventsQueueHolder implements OnModuleDestroy {
 
     try {
       await addProcessWebhookEvent(retryQueue, webhookEventId);
+      this.markPublishSucceeded();
     } catch (error) {
       this.markPoisoned(retryQueue, error);
       throw error;
@@ -178,10 +189,32 @@ export class WebhookEventsQueueHolder implements OnModuleDestroy {
     if (this.currentQueue === queue) {
       this.poisoned = true;
     }
+    this.poisonedSinceLastPublish = true;
+
+    const errorCode = toSafeErrorCode(error, 'WEBHOOK_EVENTS_QUEUE_POISONED');
+    const decision = this.poisonThrottle.shouldEmit(errorCode);
+    if (!decision) {
+      return;
+    }
 
     this.logger.warn('webhook_events_queue_poisoned', {
       status: 'FAILED',
-      errorCode: toSafeErrorCode(error, 'WEBHOOK_EVENTS_QUEUE_POISONED'),
+      errorCode,
+      suppressedCount: decision.suppressedCount,
+    });
+  }
+
+  private markPublishSucceeded(): void {
+    if (!this.poisonedSinceLastPublish) {
+      return;
+    }
+
+    const suppressedCount = this.poisonThrottle.reset();
+    this.poisonedSinceLastPublish = false;
+
+    this.logger.info('webhook_events_queue_recovered', {
+      status: 'READY',
+      suppressedCount,
     });
   }
 

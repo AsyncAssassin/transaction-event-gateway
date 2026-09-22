@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 
+import { StructuredLogger } from '../common/logging/structured-logger';
 import {
   ProcessWebhookEventJobData,
   PROCESS_WEBHOOK_EVENT_JOB_NAME,
@@ -147,6 +148,50 @@ describe('WebhookEventsQueueHolder', () => {
     expect(firstQueue.close).toHaveBeenCalledTimes(1);
     expect(firstQueue.add).not.toHaveBeenCalled();
     expect(secondQueue.add).toHaveBeenCalledTimes(1);
+  });
+
+  it('summarizes a burst of poison errors and logs one recovery line after the next publish', async () => {
+    const warn = jest
+      .spyOn(StructuredLogger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    const info = jest
+      .spyOn(StructuredLogger.prototype, 'info')
+      .mockImplementation(() => undefined);
+
+    try {
+      const firstQueue = createQueueMock();
+      const secondQueue = createQueueMock();
+      queueFactory
+        .mockReturnValueOnce(
+          firstQueue as unknown as Queue<ProcessWebhookEventJobData>,
+        )
+        .mockReturnValueOnce(
+          secondQueue as unknown as Queue<ProcessWebhookEventJobData>,
+        );
+
+      holder.getQueue();
+      firstQueue.emitError(new Error('connect ECONNREFUSED 127.0.0.1:6379'));
+      firstQueue.emitError(new Error('connect ECONNREFUSED 127.0.0.1:6379'));
+      firstQueue.emitError(new Error('connect ECONNREFUSED 127.0.0.1:6379'));
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith('webhook_events_queue_poisoned', {
+        status: 'FAILED',
+        errorCode: 'WEBHOOK_EVENTS_QUEUE_POISONED',
+        suppressedCount: 0,
+      });
+
+      await holder.addProcessWebhookEvent('webhook-event-1');
+
+      expect(secondQueue.add).toHaveBeenCalledTimes(1);
+      expect(info).toHaveBeenCalledWith('webhook_events_queue_recovered', {
+        status: 'READY',
+        suppressedCount: 2,
+      });
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
+    }
   });
 
   it('closes the active queue on module destroy', async () => {

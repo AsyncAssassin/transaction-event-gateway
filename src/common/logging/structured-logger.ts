@@ -14,7 +14,8 @@ export type StructuredLogField =
   | 'errorCode'
   | 'method'
   | 'path'
-  | 'durationMs';
+  | 'durationMs'
+  | 'suppressedCount';
 
 export type StructuredLogFields = Partial<Record<StructuredLogField, unknown>>;
 
@@ -31,6 +32,7 @@ const ALLOWED_LOG_FIELDS = new Set<StructuredLogField>([
   'method',
   'path',
   'durationMs',
+  'suppressedCount',
 ]);
 
 const MAX_LOG_STRING_LENGTH = 500;
@@ -85,6 +87,10 @@ export function createStructuredLogEntry(
   return entry;
 }
 
+export function isSafeErrorCode(value: unknown): value is string {
+  return typeof value === 'string' && SAFE_ERROR_CODE_PATTERN.test(value);
+}
+
 export function toSafeErrorCode(error: unknown, fallback: string): string {
   const exceptionErrorCode = getHttpExceptionErrorCode(error);
 
@@ -94,7 +100,7 @@ export function toSafeErrorCode(error: unknown, fallback: string): string {
 
   const message = error instanceof Error ? error.message : undefined;
 
-  if (message && SAFE_ERROR_CODE_PATTERN.test(message)) {
+  if (isSafeErrorCode(message)) {
     return message;
   }
 
@@ -114,10 +120,7 @@ function getHttpExceptionErrorCode(error: unknown): string | undefined {
 
   const errorCode = (response as { error?: unknown }).error;
 
-  return typeof errorCode === 'string' &&
-    SAFE_ERROR_CODE_PATTERN.test(errorCode)
-    ? errorCode
-    : undefined;
+  return isSafeErrorCode(errorCode) ? errorCode : undefined;
 }
 
 function normalizeLogValue(
