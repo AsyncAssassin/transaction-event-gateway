@@ -1232,6 +1232,9 @@ Serving readiness (`/health/serving`):
 ## Docker Compose Services
 
 ```text
+migrate
+  One-shot TypeORM migration runner; api and worker wait for it to succeed
+
 api
   NestJS HTTP application
 

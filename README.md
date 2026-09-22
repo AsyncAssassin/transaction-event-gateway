@@ -242,6 +242,22 @@ Health endpoints:
 - `GET http://localhost:3000/health/ready` (config, PostgreSQL, Redis; for operators and deploy gates)
 - `GET http://localhost:3000/health/serving` (config and PostgreSQL only; load balancer target)
 
+### Full Stack With Docker Compose
+
+`docker compose up` builds the image once and starts everything in order: PostgreSQL and Redis with health checks, a one-shot `migrate` service that runs `npm run migration:run:prod` and exits, then the API and worker, which start only after the migration finished successfully:
+
+```bash
+docker compose up --build
+```
+
+The API listens on `http://localhost:3000`; the API and worker restart automatically unless stopped. The stack uses the placeholder webhook secret from `docker-compose.yml`, so the smoke script must sign with the same value:
+
+```bash
+WEBHOOK_SECRET=local-development-placeholder-secret npm run smoke:local
+```
+
+Stop the containerized API and worker with `docker compose stop api worker` before running them from `dist/` on the same port.
+
 ## API Examples
 
 ### Create a payment intent

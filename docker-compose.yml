@@ -1,4 +1,16 @@
 services:
+  migrate:
+    build:
+      context: .
+    image: transaction-event-gateway:local
+    command: ["npm", "run", "migration:run:prod"]
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/transaction_event_gateway
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build:
       context: .
@@ -13,7 +25,10 @@ services:
       WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: 300
     ports:
       - "3000:3000"
+    restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -31,7 +46,10 @@ services:
       REDIS_URL: redis://redis:6379
       WEBHOOK_SECRET: local-development-placeholder-secret
       WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: 300
+    restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
