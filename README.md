@@ -395,6 +395,8 @@ npm run smoke:local
 
 E2E tests use the configured local PostgreSQL and Redis instances. The e2e global setup runs database migrations before the test suite starts.
 
+Dependabot opens grouped weekly pull requests for npm dependencies and GitHub Actions (`.github/dependabot.yml`); NestJS packages are grouped so they always move together, and major versions are upgraded manually.
+
 ### Local Smoke Check
 
 Run the repeatable local smoke check after the API, worker, PostgreSQL, and Redis are already running:

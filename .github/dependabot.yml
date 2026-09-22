@@ -1,0 +1,37 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # NestJS packages must move together: mixing versions of @nestjs/core and
+      # @nestjs/common breaks module resolution at runtime.
+      nestjs:
+        patterns:
+          - "@nestjs/*"
+      production-dependencies:
+        dependency-type: production
+        exclude-patterns:
+          - "@nestjs/*"
+      development-dependencies:
+        dependency-type: development
+        exclude-patterns:
+          - "@nestjs/*"
+    ignore:
+      # Major versions are reviewed and upgraded by hand.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns:
+          - "*"

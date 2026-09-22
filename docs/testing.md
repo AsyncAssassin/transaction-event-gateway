@@ -138,6 +138,8 @@ The e2e global setup runs migrations against the configured local PostgreSQL dat
 
 CI gates dependency risk with `npm audit --omit=dev` (production dependency tree, expected `0 vulnerabilities`). Dev-only advisories are outside that gate, so run the full `npm audit` periodically as well.
 
+Dependabot (`.github/dependabot.yml`) opens grouped weekly pull requests so the audit gate does not silently turn red while the repository is idle: all `@nestjs/*` packages move together in one group because mixed NestJS versions break module resolution at runtime, other production and development dependencies form two more groups, and GitHub Actions versions form a fourth. Major versions are excluded and upgraded by hand. CI runs on every Dependabot pull request, so a bump that changes Prettier output or breaks a test fails there instead of on `main`. Dependabot alerts and security updates are enabled in the repository settings as well, so a new advisory produces a pull request without waiting for the weekly schedule.
+
 ## Local Smoke Check
 
 Use `npm run smoke:local` for a one-command local smoke check once PostgreSQL, Redis, the API process, and the worker process are already running. The script expects migrations to be applied and uses `SMOKE_BASE_URL` when the API is not on `http://localhost:3000`.
