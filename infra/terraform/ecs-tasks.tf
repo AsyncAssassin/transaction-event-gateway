@@ -3,7 +3,12 @@ locals {
     NODE_ENV                            = "production"
     OUTBOX_DISPATCH_ENABLED             = "true"
     OUTBOX_DISPATCH_INTERVAL_MS         = "1000"
+    OUTBOX_MAX_ATTEMPTS                 = "10"
     PORT                                = tostring(var.app_port)
+    RATE_LIMIT_ENABLED                  = "true"
+    RATE_LIMIT_TTL_SECONDS              = "60"
+    RATE_LIMIT_LIMIT                    = "100"
+    SWAGGER_ENABLED                     = "false"
     WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = "300"
   }
 

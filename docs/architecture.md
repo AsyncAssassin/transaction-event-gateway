@@ -295,7 +295,7 @@ Invalid transitions:
 - `CONFIRMED` to `FAILED`, unless a future explicit `REVERTED` domain state is introduced.
 - `FAILED` to `CONFIRMED`.
 - `EXPIRED` to `PROCESSING` or `CONFIRMED`.
-- Any state change caused by a webhook event that does not match the payment intent amount, asset, or expected reference.
+- Any state change caused by a webhook event that does not match the payment intent amount or asset.
 
 ### Webhook Event
 
@@ -473,13 +473,14 @@ Indexes and constraints:
 ```text
 index outbox_events_status_next_attempt_idx (status, next_attempt_at)
 index outbox_events_aggregate_idx (aggregate_type, aggregate_id)
+index outbox_events_dead_at_idx (dead_at) where dead_at is not null
 ```
 
 Constraint rationale:
 
 - Pending status index allows efficient dispatcher polling.
 - Aggregate index supports tracing an outbox event back to the webhook event.
-- Attempts and next attempt fields support bounded retry with backoff.
+- Attempts and next attempt fields support retry with capped backoff. Transient Redis, BullMQ, or publisher failures keep `dead_at` unset and retry indefinitely. `dead_at` is reserved for deterministic poison outbox payloads, such as a missing or non-string `webhookEventId`, that should not be retried without data repair.
 
 ### `webhook_processing_attempts`
 
@@ -569,9 +570,9 @@ Error cases:
 
 | Status | Case |
 | --- | --- |
-| 400 | Missing `Idempotency-Key`, invalid JSON, or DTO validation failure |
+| 400 | Missing `Idempotency-Key`, invalid JSON, DTO validation failure, unsupported asset, invalid amount, or invalid destination |
 | 409 | Same idempotency key with different request body |
-| 422 | Unsupported asset, invalid amount, or invalid destination |
+| 413 | Request body exceeds the configured size limit |
 | 503 | PostgreSQL unavailable |
 
 ### `POST /webhooks/blockchain`
@@ -624,7 +625,7 @@ Error cases:
 | --- | --- |
 | 400 | Missing required headers or invalid payload |
 | 401 | Invalid HMAC signature |
-| 408 | Timestamp outside configured tolerance |
+| 400 | Timestamp outside configured tolerance (`STALE_WEBHOOK_TIMESTAMP`) |
 | 409 | Same provider event ID with a different payload hash |
 | 409 | Reused nonce with a different event |
 | 503 | PostgreSQL unavailable |
@@ -652,6 +653,12 @@ Response `202 Accepted`:
 }
 ```
 
+## Public Endpoint Guards
+
+- JSON request bodies are capped by the configured parser limit.
+- The current MVP uses Nest throttling with process-local, in-memory storage. The limiter key is the request source observed by Nest/Express; local or direct deployments use the request IP.
+- Behind ALB/proxy, the observed source may be the ALB/proxy or another shared source, and limiter state is not shared across API tasks. Accurate per-client IP limiting requires explicit trust proxy / `X-Forwarded-For` handling and a distributed/shared limiter, which are not implemented in the current MVP.
+
 ## Idempotency Design
 
 ### Request Body Canonicalization and Hashing
@@ -662,7 +669,8 @@ Request hashing uses a canonical representation of the logical request body:
 - Remove transport-only fields.
 - Preserve semantically meaningful fields.
 - Sort object keys recursively.
-- Normalize numeric strings where the API contract allows it.
+- Serialize canonical JSON byte-exactly. Numeric strings are compared as provided
+  and are not normalized, so `"125.50"` and `"125.5"` hash differently.
 - Serialize canonical JSON.
 - Hash with SHA-256.
 
@@ -864,6 +872,10 @@ When processing fails:
 - `webhook_events.status` becomes `FAILED` when the failure is durable and actionable.
 - The failure reason is stored in a sanitized form.
 
+### Publisher Queue Recovery
+
+The outbox publisher owns its BullMQ `Queue` instance through a holder. If that object emits an error or fails a publish, the holder marks it poisoned, recreates the queue, and retries the publish once. If the retry also fails, the failure is treated as a transient outbox dispatch failure: the outbox row remains `FAILED` with capped backoff metadata and `dead_at` unset.
+
 ### Manual Retry
 
 Manual retry should:
@@ -975,7 +987,7 @@ All business state, idempotency decisions, webhook acceptance records, and outbo
 
 ### Redis Is Disposable Infrastructure
 
-Redis is required for BullMQ execution but does not hold authoritative business state. If Redis is unavailable, already committed outbox events remain pending and can be published later.
+Redis is required for BullMQ execution but does not hold authoritative business state. If Redis is unavailable, already committed outbox events remain pending or retryable and can be published later.
 
 ### Use Webhook Inbox and Transactional Outbox
 
@@ -1009,7 +1021,7 @@ The webhook is rejected with `401 Unauthorized`. The payload is not persisted an
 
 ### Stale Timestamp
 
-The webhook is rejected with `408 Request Timeout` or equivalent API error. The payload is not persisted. The event ID may appear again with a fresh timestamp and valid signature.
+The webhook is rejected with `400 Bad Request` and `STALE_WEBHOOK_TIMESTAMP`. The payload is not persisted. The event ID may appear again with a fresh timestamp and valid signature.
 
 ### Webhook Accepted but Worker Failed
 
@@ -1017,7 +1029,7 @@ The webhook remains durable in `webhook_events`. The job may retry automatically
 
 ### DB Commit Succeeded but Queue Publish Failed
 
-The outbox event remains `PENDING` or `FAILED` with retry metadata. The dispatcher retries publication. Duplicate publication is acceptable because the worker is idempotent.
+The outbox event remains `PENDING` or `FAILED` with retry metadata. Transient failures record attempts, sanitized `last_error`, capped `next_attempt_at`, and no `dead_at`; the dispatcher retries indefinitely. Duplicate publication is acceptable because the worker is idempotent.
 
 ### Worker Crashes Mid-Processing
 
@@ -1025,7 +1037,7 @@ If the crash happens before transaction commit, PostgreSQL rolls back changes an
 
 ### Redis Unavailable
 
-Payment intent creation can still operate. Webhook acceptance can still persist inbox and outbox records. Queue publication and processing pause until Redis recovers.
+Payment intent creation can still operate. Webhook acceptance can still persist inbox and outbox records. `/health/ready` reports unavailable because the independent Redis probe fails, while `/health/serving` can remain healthy when configuration and PostgreSQL are healthy. Queue publication and processing wait and retry until Redis recovers.
 
 ### PostgreSQL Unavailable
 
@@ -1158,6 +1170,7 @@ Endpoints:
 ```text
 GET /health/live
 GET /health/ready
+GET /health/serving
 ```
 
 Liveness:
@@ -1165,11 +1178,17 @@ Liveness:
 - Process is running.
 - Event loop is responsive.
 
-Readiness:
+Full readiness (`/health/ready`):
 
-- PostgreSQL connection is available.
-- Redis connection is available for queue-producing processes.
 - Required environment configuration is loaded.
+- PostgreSQL is available through an isolated bounded health pool, not the main TypeORM money-path pool.
+- Redis is available through an independent health probe, not through the BullMQ queue client.
+
+Serving readiness (`/health/serving`):
+
+- Required environment configuration is loaded.
+- PostgreSQL is available through the isolated bounded health pool.
+- Redis is intentionally excluded so a Redis incident does not drain API tasks that can still accept durable PostgreSQL-backed requests.
 
 ### Correlation IDs
 
@@ -1255,6 +1274,7 @@ The MVP includes:
 - Docker Compose for local execution.
 - Swagger/OpenAPI documentation.
 - Health checks.
+- Public request body limit and process-local rate limiting by observed request source.
 - Core unit, integration, e2e, worker, and idempotency tests.
 - README with setup, API usage, and failure-mode notes.
 
@@ -1263,7 +1283,7 @@ The MVP includes:
 Potential extensions after MVP:
 
 - Prometheus metrics and Grafana dashboards.
-- Rate limiting for public endpoints.
+- Proxy-aware forwarded-IP tracking and distributed/shared rate limiting for ALB/proxy deployments.
 - Admin UI or CLI for failed webhook inspection and retry.
 - Dead-letter queue monitoring.
 - Payment intent expiration scheduler.

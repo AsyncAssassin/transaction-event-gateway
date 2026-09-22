@@ -439,7 +439,7 @@ variable "redis_at_rest_encryption_enabled" {
 }
 
 variable "redis_transit_encryption_enabled" {
-  description = "Whether to enable in-transit encryption for Redis. Defaults to false because current app configuration accepts redis:// URLs only."
+  description = "Whether to enable in-transit encryption for Redis. When true, supply REDIS_URL as rediss:// (the app accepts both redis:// and rediss://)."
   type        = bool
   default     = false
 }
@@ -462,13 +462,24 @@ variable "redis_apply_immediately" {
 }
 
 variable "health_check_path" {
-  description = "Future ALB health check path for API readiness."
+  description = "Future ALB health check path for API serving readiness. Defaults to /health/serving (config and PostgreSQL only) so a Redis incident does not drain API tasks. Use /health/ready only for operator or deploy-gate checks, not for load balancer routing."
   type        = string
-  default     = "/health/ready"
+  default     = "/health/serving"
 
   validation {
     condition     = startswith(var.health_check_path, "/")
     error_message = "health_check_path must start with /."
+  }
+}
+
+variable "health_check_grace_period_seconds" {
+  description = "Grace period before ECS starts counting API health checks, so slow-starting tasks are not killed during boot."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.health_check_grace_period_seconds >= 0 && var.health_check_grace_period_seconds == floor(var.health_check_grace_period_seconds)
+    error_message = "health_check_grace_period_seconds must be a non-negative integer."
   }
 }
 

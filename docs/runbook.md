@@ -11,13 +11,14 @@ This runbook covers local and staging-style operation for `transaction-event-gat
 - **PostgreSQL**: stores payment intents, idempotency records, webhook inbox rows, outbox rows, and processing attempts.
 - **Redis/BullMQ**: stores queue state for asynchronous webhook processing. It is required for progress, not correctness.
 - **Outbox dispatcher runner**: runs inside the worker process when `OUTBOX_DISPATCH_ENABLED=true`, polling eligible outbox rows every `OUTBOX_DISPATCH_INTERVAL_MS`.
-- **Health endpoints**: `/health/live` checks process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis.
+- **Health endpoints**: `/health/live` checks process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis (operators and deploy gates); `/health/serving` checks configuration and PostgreSQL only and is the load balancer target so Redis incidents do not drain API tasks.
 
 ## Quick Health Checks
 
 ```bash
 curl -i http://localhost:3000/health/live
 curl -i http://localhost:3000/health/ready
+curl -i http://localhost:3000/health/serving
 docker compose ps
 npm run smoke:local
 ```
@@ -26,12 +27,22 @@ Healthy results:
 
 - `/health/live` returns `200` with `status: "ok"`.
 - `/health/ready` returns `200` with `checks.config`, `checks.postgres`, and `checks.redis` all `ok`.
+- `/health/serving` returns `200` with `checks.config` and `checks.postgres` when the API can stay in load balancer rotation.
 - `docker compose ps` shows PostgreSQL and Redis running and healthy.
 - `npm run smoke:local` passes after PostgreSQL, Redis, the API process, and the worker process are running with matching local environment.
 
 Do not use the local smoke command as a deployed AWS smoke test unless a future
 approved phase explicitly allows that target and its data, credential, and
 evidence boundaries.
+
+## Rate Limiting
+
+Current rate limiting is process-local, in-memory, and keyed by the request
+source observed by Nest/Express. Local or direct traffic uses the request IP.
+Behind ALB/proxy, the observed source may be the ALB/proxy or another shared
+source, and limiter state is not shared across API tasks. Treat proxy-aware
+forwarded-IP handling and distributed/shared rate limiting as a prerequisite or
+known limitation before real multi-client traffic.
 
 ## Database Inspection
 
@@ -40,7 +51,7 @@ All commands below target the local Docker Compose PostgreSQL service.
 Recent payment intents:
 
 ```bash
-docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT id, status, amount, asset, reference, client_request_id, confirmed_tx_hash, failure_reason, created_at, updated_at FROM payment_intents ORDER BY created_at DESC LIMIT 20;"
+docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT id, status, reference, amount, asset, client_request_id, confirmed_tx_hash, failure_reason, created_at, updated_at FROM payment_intents ORDER BY created_at DESC LIMIT 20;"
 ```
 
 Recent webhook events:
@@ -76,7 +87,7 @@ docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SEL
 Confirmed payment intents by transaction hash:
 
 ```bash
-docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT id, status, amount, asset, reference, confirmed_tx_hash, updated_at FROM payment_intents WHERE confirmed_tx_hash = '<tx_hash>';"
+docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT id, status, reference, amount, asset, confirmed_tx_hash, updated_at FROM payment_intents WHERE confirmed_tx_hash = '<tx_hash>';"
 ```
 
 ## Outbox Troubleshooting
@@ -85,13 +96,28 @@ Outbox statuses:
 
 - `PENDING`: accepted webhook work is durable but has not been published to BullMQ yet.
 - `PUBLISHED`: dispatcher published the BullMQ job and marked the outbox row complete.
-- `FAILED`: dispatcher attempted publication and stored retry metadata.
+- `FAILED`: dispatcher attempted publication and stored retry metadata. A transient failure remains eligible for later dispatch when `dead_at` is null.
 
 Retry metadata:
 
 - `attempts`: number of failed publish attempts recorded for the outbox row.
 - `next_attempt_at`: earliest time a failed row is eligible for another dispatch.
 - `last_error`: sanitized dispatch failure reason.
+- `dead_at`: set only for deterministic poison or non-retryable outbox payloads, such as a missing or non-string `webhookEventId`. It is not used for transient Redis, BullMQ, or publisher outages.
+
+Find non-retryable poison outbox rows that need operator attention:
+
+```bash
+docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT id, aggregate_id, attempts, last_error, dead_at FROM outbox_events WHERE dead_at IS NOT NULL ORDER BY dead_at DESC LIMIT 50;"
+```
+
+Dead rows are poison/non-retryable records, not the normal backlog shape for a Redis outage. If manual data repair is intended, correct the payload first and intentionally reset the relevant retry fields, for example `dead_at`, `attempts`, and `next_attempt_at`; clearing only `dead_at` is not enough if the payload is still invalid.
+
+Inspect transient retry backlog:
+
+```bash
+docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT id, aggregate_id, attempts, next_attempt_at, last_error, updated_at FROM outbox_events WHERE status = 'FAILED' AND dead_at IS NULL ORDER BY updated_at DESC LIMIT 50;"
+```
 
 If outbox rows are stuck:
 
@@ -99,7 +125,8 @@ If outbox rows are stuck:
 - Confirm `OUTBOX_DISPATCH_ENABLED` is not disabled.
 - Confirm Redis is reachable from the worker.
 - Check `next_attempt_at` for failed rows that are waiting for backoff.
-- Check worker logs for `outbox_dispatch_failed` or `outbox_dispatch_runner_failed`.
+- Check `attempts`, `next_attempt_at`, and `last_error` to distinguish active capped-backoff retry from a quiet dispatcher.
+- Check worker logs for `outbox_dispatch_failed`, `outbox_dispatch_poisoned`, `webhook_events_queue_poisoned`, or `outbox_dispatch_runner_failed`.
 - Remember webhook acceptance writes `webhook_events` and `outbox_events`; it does not publish directly to BullMQ.
 
 ## Worker Troubleshooting
@@ -123,7 +150,7 @@ If `webhook_events.status` becomes `FAILED`:
 
 - Read `webhook_events.failure_reason`.
 - Read the latest `webhook_processing_attempts.error_message`.
-- Compare the webhook payload against the referenced `payment_intents` row for amount, asset, reference, current status, and transaction hash.
+- Compare the webhook payload against the referenced `payment_intents` row for amount, asset, current status, and transaction hash. `reference` is not part of the signed webhook DTO; unknown `reference` fields are rejected before worker processing.
 
 ## Webhook Failure Reasons
 
@@ -132,22 +159,23 @@ If `webhook_events.status` becomes `FAILED`:
 - `MISSING_TX_HASH`: a confirmed transaction event did not include a usable transaction hash.
 - `AMOUNT_MISMATCH`: webhook amount does not match the payment intent amount.
 - `ASSET_MISMATCH`: webhook asset does not match the payment intent asset.
-- `REFERENCE_MISMATCH`: webhook reference was present and did not match the payment intent reference.
 - `PAYMENT_INTENT_TERMINAL`: the payment intent is already terminal or confirmed with a different transaction hash.
 - `CONFIRMED_TX_HASH_CONFLICT`: the transaction hash is already attached to another payment intent.
 
 ## Redis Unavailable
 
 - `/health/ready` should return unavailable because Redis readiness fails.
+- `/health/serving` can remain healthy when configuration and PostgreSQL are healthy; this is the load balancer target.
 - Payment intent creation and webhook acceptance are PostgreSQL-backed for correctness.
-- Outbox dispatch and worker processing cannot progress until Redis recovers.
+- Transient outbox publish failures remain `FAILED` with `dead_at` unset, capped `next_attempt_at`, sanitized `last_error`, and increasing `attempts`; retries continue indefinitely while Redis or BullMQ is unavailable.
 - After Redis returns, the worker dispatcher should resume publishing eligible outbox rows and BullMQ processing should continue.
 
 ## PostgreSQL Unavailable
 
 - Durable API operations should fail because idempotency, webhook inbox, outbox, and payment state require PostgreSQL.
 - The service must not fall back to Redis or memory for correctness.
-- `/health/ready` should return unavailable because PostgreSQL readiness fails.
+- `/health/ready` and `/health/serving` should return unavailable because PostgreSQL readiness fails.
+- Health endpoints use an isolated bounded PostgreSQL health pool, not the main TypeORM pool used by durable API and worker operations.
 - Migrations and schema checks require PostgreSQL.
 
 ## Safe Local Reset Commands

@@ -21,7 +21,6 @@ type BlockchainWebhookPayload = {
   txHash?: unknown;
   amount?: unknown;
   asset?: unknown;
-  reference?: unknown;
 };
 
 type ProcessingResult =
@@ -39,7 +38,6 @@ type ProcessingFailureReason =
   | 'MISSING_TX_HASH'
   | 'AMOUNT_MISMATCH'
   | 'ASSET_MISMATCH'
-  | 'REFERENCE_MISMATCH'
   | 'PAYMENT_INTENT_TERMINAL'
   | 'CONFIRMED_TX_HASH_CONFLICT';
 
@@ -317,13 +315,9 @@ function validatePayloadMatchesPaymentIntent(
     return 'ASSET_MISMATCH';
   }
 
-  if (
-    typeof payload.reference === 'string' &&
-    paymentIntent.reference !== payload.reference
-  ) {
-    return 'REFERENCE_MISMATCH';
-  }
-
+  // Reference is intentionally not validated here: the signed webhook contract
+  // (BlockchainWebhookDto) carries no reference field and forbidNonWhitelisted
+  // rejects any extra property, so a reference can never reach this payload.
   return null;
 }
 

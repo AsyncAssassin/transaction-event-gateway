@@ -92,6 +92,56 @@ describe('Payment intents (e2e)', () => {
     expect(response.body).toMatchObject({
       error: 'VALIDATION_ERROR',
     });
+    expect(response.body.details).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'amount' })]),
+    );
+  });
+
+  it('rejects an oversized request body with 413', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/payment-intents')
+      .set('Idempotency-Key', 'pi-oversized')
+      .send({
+        ...validPayload,
+        metadata: { blob: 'A'.repeat(300_000) },
+      })
+      .expect(413);
+
+    expect(response.body).toMatchObject({ error: 'PAYLOAD_TOO_LARGE' });
+  });
+
+  it('treats a different numeric string form as a conflict (no normalization)', async () => {
+    await request(app.getHttpServer())
+      .post('/payment-intents')
+      .set('Idempotency-Key', 'pi-numeric-form')
+      .send({ ...validPayload, amount: '125.50' })
+      .expect(201);
+
+    const conflict = await request(app.getHttpServer())
+      .post('/payment-intents')
+      .set('Idempotency-Key', 'pi-numeric-form')
+      .send({ ...validPayload, amount: '125.5' })
+      .expect(409);
+
+    expect(conflict.body).toMatchObject({ error: 'IDEMPOTENCY_CONFLICT' });
+    await expectPaymentIntentCount(dataSource, 1);
+  });
+
+  it('creates exactly one intent for concurrent same key with different payloads', async () => {
+    const [firstResponse, secondResponse] = await Promise.all([
+      request(app.getHttpServer())
+        .post('/payment-intents')
+        .set('Idempotency-Key', 'pi-concurrent-conflict')
+        .send(validPayload),
+      request(app.getHttpServer())
+        .post('/payment-intents')
+        .set('Idempotency-Key', 'pi-concurrent-conflict')
+        .send({ ...validPayload, amount: '999.99' }),
+    ]);
+
+    const statuses = [firstResponse.status, secondResponse.status].sort();
+    expect(statuses).toEqual([201, 409]);
+    await expectPaymentIntentCount(dataSource, 1);
   });
 
   it('replays the stored response for the same key and same payload', async () => {

@@ -93,7 +93,10 @@ describe('Outbox dispatcher (e2e)', () => {
         type: 'exponential',
         delay: 5_000,
       },
-      removeOnFail: false,
+      removeOnFail: {
+        age: 7 * 24 * 3_600,
+        count: 5_000,
+      },
     });
   });
 
@@ -125,6 +128,7 @@ describe('Outbox dispatcher (e2e)', () => {
         SELECT
           status,
           attempts,
+          dead_at AS "deadAt",
           last_error AS "lastError",
           next_attempt_at AS "nextAttemptAt",
           published_at AS "publishedAt"
@@ -135,6 +139,7 @@ describe('Outbox dispatcher (e2e)', () => {
     )) as Array<{
       status: string;
       attempts: number;
+      deadAt: Date | null;
       lastError: string | null;
       nextAttemptAt: Date | null;
       publishedAt: Date | null;
@@ -144,6 +149,7 @@ describe('Outbox dispatcher (e2e)', () => {
       expect.objectContaining({
         status: 'FAILED',
         attempts: 1,
+        deadAt: null,
         lastError: 'redis publish failed with details',
         publishedAt: null,
       }),
@@ -154,7 +160,229 @@ describe('Outbox dispatcher (e2e)', () => {
     );
     await expectWebhookStatus(dataSource, webhookEventId, 'RECEIVED');
   });
+
+  it('keeps transient publish failures retryable after the old max-attempt threshold', async () => {
+    const webhookEventId = await insertWebhookEvent(dataSource);
+    const outboxEventId = await insertRetryableFailedOutboxEvent(
+      dataSource,
+      webhookEventId,
+      9,
+    );
+    const failingPublisher = {
+      publishProcessWebhookEvent: jest
+        .fn()
+        .mockRejectedValue(new Error('redis publish failed')),
+    };
+    const failingDispatcher = new OutboxDispatcherService(
+      dataSource,
+      failingPublisher as unknown as WebhookEventJobPublisher,
+    );
+
+    await expect(failingDispatcher.dispatchBatch()).resolves.toEqual({
+      selected: 1,
+      published: 0,
+      failed: 1,
+    });
+
+    const rows = (await dataSource.query(
+      `
+        SELECT
+          status,
+          attempts,
+          dead_at AS "deadAt",
+          last_error AS "lastError",
+          next_attempt_at AS "nextAttemptAt"
+        FROM outbox_events
+        WHERE id = $1
+      `,
+      [outboxEventId],
+    )) as Array<{
+      status: string;
+      attempts: number;
+      deadAt: Date | null;
+      lastError: string | null;
+      nextAttemptAt: Date | null;
+    }>;
+
+    expect(rows[0]?.status).toBe('FAILED');
+    expect(rows[0]?.attempts).toBe(10);
+    expect(rows[0]?.deadAt).toBeNull();
+    expect(rows[0]?.lastError).toBe('redis publish failed');
+    expect(rows[0]?.nextAttemptAt).toBeInstanceOf(Date);
+
+    // The retry is delayed, not terminalized.
+    await expect(failingDispatcher.dispatchBatch()).resolves.toEqual({
+      selected: 0,
+      published: 0,
+      failed: 0,
+    });
+    expect(failingPublisher.publishProcessWebhookEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('dead-letters a deterministic poison outbox payload without publishing', async () => {
+    const webhookEventId = await insertWebhookEvent(dataSource);
+    const outboxEventId = await insertOutboxEvent(dataSource, webhookEventId, {
+      webhookEventId: 42,
+    });
+    const publisher = {
+      publishProcessWebhookEvent: jest.fn().mockResolvedValue(undefined),
+    };
+    const poisonDispatcher = new OutboxDispatcherService(
+      dataSource,
+      publisher as unknown as WebhookEventJobPublisher,
+    );
+
+    await expect(poisonDispatcher.dispatchBatch()).resolves.toEqual({
+      selected: 1,
+      published: 0,
+      failed: 1,
+    });
+    expect(publisher.publishProcessWebhookEvent).not.toHaveBeenCalled();
+
+    const rows = (await dataSource.query(
+      `
+        SELECT
+          status,
+          attempts,
+          dead_at AS "deadAt",
+          last_error AS "lastError",
+          next_attempt_at AS "nextAttemptAt"
+        FROM outbox_events
+        WHERE id = $1
+      `,
+      [outboxEventId],
+    )) as Array<{
+      status: string;
+      attempts: number;
+      deadAt: Date | null;
+      lastError: string | null;
+      nextAttemptAt: Date | null;
+    }>;
+
+    expect(rows[0]?.status).toBe('FAILED');
+    expect(rows[0]?.attempts).toBe(1);
+    expect(rows[0]?.deadAt).toBeInstanceOf(Date);
+    expect(rows[0]?.lastError).toBe('INVALID_OUTBOX_PAYLOAD');
+    expect(rows[0]?.nextAttemptAt).toBeNull();
+
+    await expect(poisonDispatcher.dispatchBatch()).resolves.toEqual({
+      selected: 0,
+      published: 0,
+      failed: 0,
+    });
+  });
+
+  it('publishes after transient failures once the retry becomes due', async () => {
+    const webhookEventId = await insertWebhookEvent(dataSource);
+    const outboxEventId = await insertOutboxEvent(dataSource, webhookEventId);
+    const publisher = {
+      publishProcessWebhookEvent: jest
+        .fn()
+        .mockRejectedValueOnce(new Error('redis temporarily unavailable'))
+        .mockResolvedValueOnce(undefined),
+    };
+    const recoveringDispatcher = new OutboxDispatcherService(
+      dataSource,
+      publisher as unknown as WebhookEventJobPublisher,
+    );
+
+    await expect(recoveringDispatcher.dispatchBatch()).resolves.toEqual({
+      selected: 1,
+      published: 0,
+      failed: 1,
+    });
+
+    await dataSource.query(
+      `
+        UPDATE outbox_events
+        SET next_attempt_at = now() - interval '1 minute'
+        WHERE id = $1
+      `,
+      [outboxEventId],
+    );
+
+    await expect(recoveringDispatcher.dispatchBatch()).resolves.toEqual({
+      selected: 1,
+      published: 1,
+      failed: 0,
+    });
+    expect(publisher.publishProcessWebhookEvent).toHaveBeenCalledTimes(2);
+    expect(publisher.publishProcessWebhookEvent).toHaveBeenNthCalledWith(
+      2,
+      webhookEventId,
+    );
+
+    const rows = (await dataSource.query(
+      `
+        SELECT
+          status,
+          attempts,
+          dead_at AS "deadAt",
+          last_error AS "lastError",
+          next_attempt_at AS "nextAttemptAt",
+          published_at AS "publishedAt"
+        FROM outbox_events
+        WHERE id = $1
+      `,
+      [outboxEventId],
+    )) as Array<{
+      status: string;
+      attempts: number;
+      deadAt: Date | null;
+      lastError: string | null;
+      nextAttemptAt: Date | null;
+      publishedAt: Date | null;
+    }>;
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        status: 'PUBLISHED',
+        attempts: 1,
+        deadAt: null,
+        lastError: null,
+        nextAttemptAt: null,
+      }),
+    ]);
+    expect(rows[0]?.publishedAt).toBeInstanceOf(Date);
+    await expectWebhookStatus(dataSource, webhookEventId, 'QUEUED');
+  });
 });
+
+async function insertRetryableFailedOutboxEvent(
+  dataSource: DataSource,
+  webhookEventId: string,
+  attempts: number,
+): Promise<string> {
+  const outboxEventId = randomUUID();
+
+  await dataSource.query(
+    `
+      INSERT INTO outbox_events (
+        id,
+        type,
+        aggregate_type,
+        aggregate_id,
+        payload,
+        status,
+        attempts,
+        next_attempt_at
+      )
+      VALUES (
+        $1,
+        'process-webhook-event',
+        'webhook_event',
+        $2,
+        $3::jsonb,
+        'FAILED',
+        $4,
+        now() - interval '1 minute'
+      )
+    `,
+    [outboxEventId, webhookEventId, JSON.stringify({ webhookEventId }), attempts],
+  );
+
+  return outboxEventId;
+}
 
 async function insertWebhookEvent(dataSource: DataSource): Promise<string> {
   const webhookEventId = randomUUID();
@@ -214,6 +442,7 @@ async function insertWebhookEvent(dataSource: DataSource): Promise<string> {
 async function insertOutboxEvent(
   dataSource: DataSource,
   webhookEventId: string,
+  payload: Record<string, unknown> = { webhookEventId },
 ): Promise<string> {
   const outboxEventId = randomUUID();
 
@@ -239,7 +468,7 @@ async function insertOutboxEvent(
     [
       outboxEventId,
       webhookEventId,
-      JSON.stringify({ webhookEventId }),
+      JSON.stringify(payload),
     ],
   );
 

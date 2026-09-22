@@ -91,7 +91,7 @@ jobs:
         run: docker build -t transaction-event-gateway:ci .
 
       - name: Verify schema drift
-        run: DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run typeorm -- schema:log
+        run: DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway bash scripts/check-schema-drift.sh
 
       - name: Audit production dependencies
         run: npm audit --omit=dev

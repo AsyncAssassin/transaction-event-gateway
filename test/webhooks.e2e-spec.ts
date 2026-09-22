@@ -144,7 +144,7 @@ describe('Blockchain webhooks (e2e)', () => {
       payload: basePayload,
       nonce: 'nonce_stale',
       timestamp: String(Math.floor(Date.now() / 1000) - 1_000),
-    }).expect(408);
+    }).expect(400);
 
     expect(response.body).toMatchObject({
       error: 'STALE_WEBHOOK_TIMESTAMP',

@@ -52,6 +52,7 @@ Scope:
 - Invalid webhook signature response.
 - Stale webhook timestamp response.
 - Duplicate webhook response.
+- Request body limit and the current rate-limit behavior for local observed request sources. These tests do not prove proxy-aware per-client IP limiting behind ALB/proxy.
 - Full webhook-to-worker processing path with BullMQ enabled.
 - Health endpoints once implemented.
 
@@ -66,7 +67,7 @@ Scope:
 - Already processed webhook event exits successfully.
 - Worker crash or thrown error before commit leaves state unchanged.
 - Unknown payment intent marks the webhook event `FAILED` with a sanitized reason.
-- Amount, asset, or reference mismatch marks the event `FAILED` without corrupting payment intent state.
+- Amount or asset mismatch, transaction hash conflict, or invalid state transition marks the event `FAILED` without corrupting payment intent state. A webhook body containing an unknown `reference` field should be rejected by DTO validation before worker processing.
 - Failed processing creates a `webhook_processing_attempts` row.
 - Successful processing marks the webhook event `PROCESSED`.
 
@@ -133,6 +134,8 @@ DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run
 ```
 
 The e2e global setup runs migrations against the configured local PostgreSQL database before the e2e suite starts.
+
+CI gates dependency risk with `npm audit --omit=dev` (production dependency tree, expected `0 vulnerabilities`). A moderate `js-yaml@3` advisory appears only in the dev tree (the istanbul/nyc chain used by Jest coverage) and does not affect the runtime, so it is out of scope for the production audit gate.
 
 ## Local Smoke Check
 

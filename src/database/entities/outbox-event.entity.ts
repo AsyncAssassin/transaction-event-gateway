@@ -18,6 +18,9 @@ export enum OutboxEventStatus {
 @Check('outbox_events_attempts_non_negative_chk', '"attempts" >= 0')
 @Index('outbox_events_status_next_attempt_idx', ['status', 'nextAttemptAt'])
 @Index('outbox_events_aggregate_idx', ['aggregateType', 'aggregateId'])
+@Index('outbox_events_dead_at_idx', ['deadAt'], {
+  where: '"dead_at" IS NOT NULL',
+})
 export class OutboxEventEntity {
   @PrimaryGeneratedColumn('uuid', { name: 'id' })
   id!: string;
@@ -50,6 +53,9 @@ export class OutboxEventEntity {
 
   @Column({ name: 'last_error', type: 'text', nullable: true })
   lastError!: string | null;
+
+  @Column({ name: 'dead_at', type: 'timestamptz', nullable: true })
+  deadAt!: Date | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;

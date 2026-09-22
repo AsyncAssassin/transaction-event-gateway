@@ -109,7 +109,7 @@ curl -i "${DEPLOYED_API_BASE_URL}/health/ready" \
 Pass criteria:
 
 - HTTP status is `200`.
-- Response body reports `status: "ok"`.
+- Response body reports `status: "ready"`.
 - Configuration, PostgreSQL, and Redis checks are all healthy.
 
 Fail criteria:

@@ -21,8 +21,15 @@ import {
   PaymentIntentResponse,
 } from './payment-intents.types';
 
+// Idempotency keys are global in the MVP (no authentication or tenancy).
+// Extension point: prefix this scope with the authenticated principal/tenant
+// when auth is introduced so keys are isolated per caller.
 const IDEMPOTENCY_SCOPE = 'payment-intents:create';
 const IDEMPOTENCY_RESOURCE_TYPE = 'payment_intent';
+// Populate expires_at so a future retention job can prune stale records.
+// No cleanup job runs yet; active-record correctness comes from the unique
+// (scope, idempotency_key) constraint regardless of this value.
+const IDEMPOTENCY_RECORD_TTL_DAYS = 30;
 
 type PaymentIntentCreatePayload = {
   amount: string;
@@ -136,6 +143,9 @@ export class PaymentIntentsService {
         scope: IDEMPOTENCY_SCOPE,
         idempotencyKey,
         requestHash,
+        expiresAt: new Date(
+          Date.now() + IDEMPOTENCY_RECORD_TTL_DAYS * 24 * 60 * 60 * 1_000,
+        ),
       })
       .orIgnore()
       .returning(['id'])

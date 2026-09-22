@@ -23,6 +23,12 @@ environment. Do not commit real AWS account IDs, ARNs, deployed URLs,
 credentials, tokens, database URLs, Redis URLs, webhook secrets, or secret
 values.
 
+Terraform backend support is enabled in the scaffold with an empty S3 backend
+block, but this runbook does not initialize a remote backend, create a state
+bucket or lock table, or approve any live Terraform command. Future backend
+values must come from ignored `infra/terraform/backend.hcl` or an explicitly
+approved command.
+
 ## Source Documents
 
 - [AWS deploy guardrails](aws-deploy-guardrails.md): budget, billing, region,
@@ -119,7 +125,10 @@ should follow after separate live-deploy approval is granted.
     are safe.
 11. Roll out the API service, then the worker service, using the same approved
     immutable image reference and conservative desired counts.
-12. Confirm readiness expectations before traffic or smoke is treated as valid.
+12. Confirm readiness expectations and the process-local rate-limit limitation
+    before traffic or smoke is treated as valid. Before real multi-client
+    traffic, decide and implement proxy-aware forwarded-IP handling plus
+    distributed/shared rate limiting, or record the limitation.
 13. Run the deployed smoke flow only after its prerequisites are approved in
     [AWS deployed smoke test flow](aws-smoke-test-flow.md). Record pass/fail
     and evidence.

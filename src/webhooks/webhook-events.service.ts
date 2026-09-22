@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  RequestTimeoutException,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -185,7 +184,10 @@ export class WebhookEventsService {
       });
     }
 
-    throw new RequestTimeoutException({
+    // 400 (not 408): a stale timestamp is fixed inside the signed payload, so a
+    // 408 would invite futile automatic retries by clients and proxies. The
+    // provider must resend with a fresh timestamp and signature.
+    throw new BadRequestException({
       error: 'STALE_WEBHOOK_TIMESTAMP',
       message: 'Webhook timestamp is outside the configured tolerance window.',
     });

@@ -7,8 +7,9 @@
 # Local scaffold validation remains:
 # terraform -chdir=infra/terraform init -backend=false
 #
-# This file is not active by itself. The committed .tf files intentionally do
-# not contain a backend block.
+# The committed .tf files contain only an empty backend "s3" {} block. This
+# file is not active unless an approved operator copies it to ignored
+# backend.hcl with approved values or supplies equivalent approved init config.
 
 bucket = "REPLACE_WITH_APPROVED_TERRAFORM_STATE_BUCKET"
 key    = "transaction-event-gateway/REPLACE_WITH_ENVIRONMENT/terraform.tfstate"

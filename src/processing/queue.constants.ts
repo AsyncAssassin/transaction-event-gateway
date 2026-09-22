@@ -19,5 +19,10 @@ export const PROCESS_WEBHOOK_EVENT_JOB_OPTIONS: JobsOptions = {
     age: 3_600,
     count: 1_000,
   },
-  removeOnFail: false,
+  // Retain failed jobs for inspection but bound their growth in Redis. Only true
+  // exceptions land here; durable domain failures complete normally.
+  removeOnFail: {
+    age: 7 * 24 * 3_600,
+    count: 5_000,
+  },
 };

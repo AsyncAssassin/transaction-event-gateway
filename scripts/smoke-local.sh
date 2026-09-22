@@ -332,7 +332,7 @@ STALE_TIMESTAMP="$(( $(date +%s) - 86400 ))"
 STALE_NONCE="nonce_${SMOKE_ID}_stale"
 STALE_SIGNATURE="$(create_signature "$STALE_TIMESTAMP" "$STALE_NONCE" "$STALE_BODY")"
 
-request POST /webhooks/blockchain 408 "$TMP_DIR/webhook-stale.json" "$TMP_DIR/webhook-stale.headers" \
+request POST /webhooks/blockchain 400 "$TMP_DIR/webhook-stale.json" "$TMP_DIR/webhook-stale.headers" \
   -H 'Content-Type: application/json' \
   -H "X-Webhook-Timestamp: $STALE_TIMESTAMP" \
   -H "X-Webhook-Nonce: $STALE_NONCE" \

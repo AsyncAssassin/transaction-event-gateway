@@ -1,12 +1,8 @@
-import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Queue } from 'bullmq';
-import { DataSource } from 'typeorm';
 
-import {
-  ProcessWebhookEventJobData,
-  WEBHOOK_EVENTS_QUEUE,
-} from '../processing/queue.constants';
+import { PostgresHealthCheckService } from './postgres-health-check.service';
+import { RedisHealthCheckService } from './redis-health-check.service';
 
 export type LivenessResponse = {
   status: 'ok';
@@ -24,6 +20,15 @@ export type ReadinessResponse = {
   };
 };
 
+export type ServingReadinessResponse = {
+  status: 'ready';
+  timestamp: string;
+  checks: {
+    config: 'ok';
+    postgres: 'ok';
+  };
+};
+
 const REQUIRED_CONFIG_KEYS = [
   'NODE_ENV',
   'PORT',
@@ -32,15 +37,13 @@ const REQUIRED_CONFIG_KEYS = [
   'WEBHOOK_SECRET',
   'WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS',
 ] as const;
-const REDIS_READINESS_TIMEOUT_MS = 1_000;
 
 @Injectable()
 export class HealthService {
   constructor(
     private readonly configService: ConfigService,
-    private readonly dataSource: DataSource,
-    @Inject(WEBHOOK_EVENTS_QUEUE)
-    private readonly webhookEventsQueue: Queue<ProcessWebhookEventJobData>,
+    private readonly postgresHealthCheck: PostgresHealthCheckService,
+    private readonly redisHealthCheck: RedisHealthCheckService,
   ) {}
 
   getLiveness(): LivenessResponse {
@@ -51,7 +54,47 @@ export class HealthService {
     };
   }
 
+  /**
+   * Full readiness for operators and deploy gates: configuration, PostgreSQL,
+   * and Redis. Not used by the ALB target group so a Redis incident does not
+   * remove API tasks that can still serve PostgreSQL-only operations.
+   */
   async getReadiness(): Promise<ReadinessResponse> {
+    this.checkConfig();
+    await this.checkPostgres();
+    await this.checkRedis();
+
+    return {
+      status: 'ready',
+      timestamp: new Date().toISOString(),
+      checks: {
+        config: 'ok',
+        postgres: 'ok',
+        redis: 'ok',
+      },
+    };
+  }
+
+  /**
+   * Serving readiness for the ALB target group: configuration plus PostgreSQL
+   * only. The HTTP endpoints the load balancer serves (payment intent creation,
+   * webhook acceptance) do not require Redis, so Redis is intentionally excluded.
+   */
+  async getServingReadiness(): Promise<ServingReadinessResponse> {
+    this.checkConfig();
+    await this.checkPostgres();
+
+    return {
+      status: 'ready',
+      timestamp: new Date().toISOString(),
+      checks: {
+        config: 'ok',
+        postgres: 'ok',
+      },
+    };
+  }
+
+  private checkConfig(): void {
     const missingKeys = REQUIRED_CONFIG_KEYS.filter((key) => {
       const value = this.configService.get<unknown>(key);
       return value === undefined || value === null || value === '';
@@ -64,13 +107,11 @@ export class HealthService {
         details: missingKeys.map((key) => ({ field: key })),
       });
     }
+  }
 
+  private async checkPostgres(): Promise<void> {
     try {
-      if (!this.dataSource.isInitialized) {
-        throw new Error('PostgreSQL connection is not initialized.');
-      }
-
-      await this.dataSource.query('SELECT 1');
+      await this.postgresHealthCheck.check();
     } catch {
       throw new ServiceUnavailableException({
         error: 'SERVICE_UNAVAILABLE',
@@ -78,16 +119,11 @@ export class HealthService {
         details: [{ dependency: 'postgres' }],
       });
     }
+  }
 
+  private async checkRedis(): Promise<void> {
     try {
-      const client = (await this.webhookEventsQueue.client) as unknown as {
-        ping: () => Promise<string>;
-      };
-      await withTimeout(
-        client.ping(),
-        REDIS_READINESS_TIMEOUT_MS,
-        'Redis readiness check timed out.',
-      );
+      await this.redisHealthCheck.check();
     } catch {
       throw new ServiceUnavailableException({
         error: 'SERVICE_UNAVAILABLE',
@@ -95,31 +131,5 @@ export class HealthService {
         details: [{ dependency: 'redis' }],
       });
     }
-
-    return {
-      status: 'ready',
-      timestamp: new Date().toISOString(),
-      checks: {
-        config: 'ok',
-        postgres: 'ok',
-        redis: 'ok',
-      },
-    };
   }
-}
-
-function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  timeoutMessage: string,
-): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout>;
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
-  });
-
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    clearTimeout(timeout);
-  });
 }

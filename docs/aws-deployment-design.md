@@ -12,7 +12,7 @@
 
 This document describes a recommended MVP AWS deployment shape for `transaction-event-gateway`. It is a handoff document for incremental infrastructure phases.
 
-The current Terraform scaffold implements ECR, security groups, the MVP HTTP ALB path, private RDS PostgreSQL, private ElastiCache Redis, Secrets Manager placeholders for runtime values, ECS Fargate task definitions, an ECS cluster, API and worker ECS services, task log groups, a minimal ECS task execution role, and a configurable private VPC endpoint egress path. It documents the Terraform backend/state decision, the ECR image publishing path, the one-off ECS migration task flow, and the deployed smoke test flow, but does not enable a remote backend. It does not publish an image, configure registry authentication, run migrations, define autoscaling, populate secret values, add deployment workflows, create NAT gateways, run deployed smoke tests, or provide live deployment behavior.
+The current Terraform scaffold implements ECR, security groups, the MVP HTTP ALB path, private RDS PostgreSQL, private ElastiCache Redis, Secrets Manager placeholders for runtime values, ECS Fargate task definitions, an ECS cluster, API and worker ECS services, task log groups, a minimal ECS task execution role, and a configurable private VPC endpoint egress path. It enables Terraform backend support with an empty S3 backend block, documents the Terraform backend/state decision, the ECR image publishing path, the one-off ECS migration task flow, and the deployed smoke test flow, but does not initialize a remote backend. It does not publish an image, configure registry authentication, run migrations, define autoscaling, populate secret values, add deployment workflows, create NAT gateways, run deployed smoke tests, or provide live deployment behavior.
 
 Before any live AWS usage, review
 [AWS deploy guardrails](aws-deploy-guardrails.md) for cost guardrails,
@@ -79,7 +79,7 @@ The API and worker should be separate ECS services even though they use the same
 
 ### Terraform State Backend
 
-The current decision is documentation-first: no active Terraform backend block is committed and no remote backend is enabled in this scaffold. Local validation should continue to use `terraform init -backend=false` so review does not create local or remote Terraform state.
+The current decision enables backend support without activating real remote state: an empty `backend "s3" {}` block is committed, but no remote backend has been initialized. Local validation should continue to use `terraform init -backend=false` so review does not create local or remote Terraform state. This phase did not create a state bucket, lock table, or any other live backend resource, and no live Terraform command was run.
 
 Before any first apply, the deployment owner must approve the Terraform state owner and backend configuration. The future remote backend should use an S3 state bucket with encryption and an approved locking mechanism, either DynamoDB locking or S3-native lockfile locking when supported by the approved Terraform version. Backend values must come from an untracked `infra/terraform/backend.hcl` file based on the committed template or from an explicitly approved command; real bucket names, lock table names, account IDs, ARNs, credentials, and state files must not be committed.
 
@@ -117,8 +117,9 @@ approval.
 - Command: default image command, currently the API process.
 - Desired count: start with at least 2 tasks for production-like availability; staging may use 1.
 - Inbound: ALB target group only.
-- Health check: ALB target group should use `GET /health/ready` so traffic reaches only tasks with required config, PostgreSQL, and Redis connectivity.
+- Health check: ALB target group should use `GET /health/serving` (config and PostgreSQL only) so a Redis incident does not drain API tasks that can still serve payment intent creation and webhook acceptance. `GET /health/ready` (config, PostgreSQL, Redis) remains for operators and deploy gates.
 - Public endpoints: REST API, Swagger, and health endpoints through the ALB.
+- Rate limiting: the current API limiter is process-local, in-memory, and keyed by the request source observed by Nest/Express. Do not treat ALB/proxy traffic as accurately limited per end-client until trust proxy / `X-Forwarded-For` handling and a distributed/shared limiter are explicitly designed and implemented.
 
 ### Worker Service
 
@@ -200,7 +201,7 @@ Recommended future release order:
 8. Confirm the migration task exits successfully, emits expected CloudWatch logs, and has an acceptable stopped reason and container exit code.
 9. Deploy the API service to the new task definition.
 10. Deploy the worker service to the new task definition.
-11. Verify `GET /health/ready` through the ALB.
+11. Verify `GET /health/serving` through the ALB target path, and use `GET /health/ready` as an operator/deploy-gate check.
 12. Run the approval-gated smoke test against the deployed API base URL using
     [AWS deployed smoke test flow](aws-smoke-test-flow.md).
 13. Watch API, worker, outbox, and webhook processing logs after rollout.
@@ -222,8 +223,8 @@ Future CI/CD can extend the current GitHub Actions path without adding it in thi
 - Register ECS task definitions with that image.
 - Follow the documented one-off migration task flow and stop on failure.
 - Update ECS services and wait for steady state.
-- Run `/health/ready` and the documented deployed smoke verification after
-  deployment.
+- Run `/health/serving`, operator `/health/ready`, and the documented deployed
+  smoke verification after deployment.
 
 Deployment credentials, registry authentication, image publication automation, and workflows are intentionally out of scope for the current Terraform scaffold.
 
@@ -233,8 +234,9 @@ Primary rollback:
 
 - Roll the ECS API service back to the previous task definition or image digest.
 - Roll the ECS worker service back to the matching previous task definition or image digest.
-- Verify `/health/ready` and run the documented deployed smoke checks after
-  rollback when the rollback environment is approved for smoke testing.
+- Verify `/health/serving`, operator `/health/ready`, and run the documented
+  deployed smoke checks after rollback when the rollback environment is approved
+  for smoke testing.
 
 Migration caution:
 
@@ -253,7 +255,8 @@ MVP observability:
 - CloudWatch log groups for API, worker, and migration tasks.
 - Structured application logs with correlation IDs and safe identifiers.
 - ALB and ECS health checks.
-- API readiness via `GET /health/ready`.
+- API serving readiness via `GET /health/serving`; full operator readiness via
+  `GET /health/ready`.
 - Approval-gated deployed smoke test using
   [AWS deployed smoke test flow](aws-smoke-test-flow.md). Keep it separate from
   the local Docker Compose smoke script unless a future phase approves reuse.
@@ -271,9 +274,10 @@ Gaps to close after MVP:
 
 - The current image default starts the API process; ECS worker and migration tasks need explicit command overrides.
 - The current Terraform task definitions reference Secrets Manager placeholders for `DATABASE_URL`, `REDIS_URL`, and `WEBHOOK_SECRET`, but Terraform intentionally does not create secret versions or store their values.
-- The Terraform backend/state decision is documented, but no remote backend is configured or enabled. First apply still requires an approved state owner and approved backend config outside git.
+- Terraform backend support is enabled with an empty S3 backend block, but no remote backend is initialized. First apply still requires an approved state owner and approved backend config outside git.
 - The current Terraform ECS services are defined in private subnets with no public IPs. The scaffold defines the preferred VPC endpoint path for ECR API, ECR Docker, CloudWatch Logs, Secrets Manager, and S3-backed ECR layer access, but those endpoints are not live until approved VPC, subnet, private route table inputs, and apply approval are provided.
 - The current Terraform ECS services still require execution of the documented ECR image publishing path, approved secret value population, endpoint input review, the documented migration task flow, and apply approval before they can serve production traffic.
+- Before real multi-client traffic, decide and implement proxy-aware forwarded-IP handling plus distributed/shared rate limiting, or record the current process-local observed-source limiter as an accepted limitation.
 - The migration task flow is documented, but the live one-off run still requires explicit approval, an approved `DATABASE_URL` secret value, the approved image reference, backend/state approval, and private egress inputs before first ECS execution.
 - The deployed smoke test flow is documented, but the live run still requires
   an approved deployed API base URL, completed migration/API/worker rollout,
@@ -281,7 +285,7 @@ Gaps to close after MVP:
   execution.
 - `LOG_LEVEL` is a deployment design item, but current runtime support should be verified before using it as an operational control.
 - Worker scaling should be conservative until production-like queue behavior and database lock contention are measured.
-- ALB readiness depends on both PostgreSQL and Redis. This is strict and production-safe, but it means Redis incidents can remove API tasks from rotation even though some durable writes may still be possible.
+- The ALB target group uses `/health/serving` (config and PostgreSQL only), so a Redis incident does not remove API tasks from rotation: payment intent creation and webhook acceptance keep working because they do not depend on Redis. The full `/health/ready` (which also checks Redis) is reserved for operators and deploy gates, not for load balancer routing.
 - Manual retry operations exist conceptually in the runbook, but custom admin tooling is not part of this deployment MVP.
 - Webhook secret rotation is not complete without application support for overlapping old and new secrets.
 - The short-lived deploy runbook is documentation-only and has not been run.
@@ -308,6 +312,7 @@ Gaps to close after MVP:
 - Confirm approved existing VPC, private subnet, and private route table inputs before any apply that would create endpoint resources.
 - Review the current ECS cluster, API service, worker service, and migration task Terraform definitions, then follow the documented one-off migration task flow when a live run is approved.
 - Review ElastiCache Redis failover, Multi-AZ, TLS client settings, snapshots, and node sizing before production use.
+- Decide and implement proxy-aware/distributed rate limiting before real multi-client traffic, or explicitly accept the current observed-source, process-local limitation.
 - Configure TLS certificate, HTTPS listener, and production ALB hardening.
 - Add least-privilege app task role permissions only if runtime AWS API access becomes necessary.
 - Populate required Secrets Manager values after approval, including assembling `DATABASE_URL` from the RDS endpoint and AWS-managed PostgreSQL master user secret outside git.

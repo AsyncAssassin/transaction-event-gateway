@@ -58,7 +58,7 @@ Scenario: Webhook timestamp is outside the configured tolerance window.
 
 Expected behavior:
 
-- Return `408 Request Timeout`.
+- Return `400 Bad Request` with `STALE_WEBHOOK_TIMESTAMP` (not 408, which would invite futile automatic retries of a timestamp fixed inside the signed payload).
 - Do not persist the payload.
 - Do not create an outbox event.
 - The same event may be sent again with a fresh timestamp and valid signature.
@@ -126,13 +126,29 @@ Expected behavior:
 
 - Payment intent creation can still operate.
 - Webhook acceptance can still persist inbox and outbox records.
-- Outbox dispatch and worker processing pause until Redis recovers.
-- Readiness should report queue infrastructure unavailable for queue-producing processes.
+- Outbox dispatch records transient failures as retryable `FAILED` rows with capped `next_attempt_at`, sanitized `last_error`, and `dead_at` unset; retries continue until Redis recovers.
+- `/health/ready` (config, PostgreSQL, Redis) reports unavailable, but `/health/serving` (config and PostgreSQL only) stays healthy. The load balancer uses `/health/serving`, so API tasks are not drained and keep serving payment intent creation and webhook acceptance during a Redis incident.
 
 Protection:
 
 - Correctness does not depend on Redis TTLs, in-memory locks, or queue uniqueness.
 - Pending outbox rows preserve work.
+
+## Rate Limit Source Behind ALB/Proxy
+
+Scenario: public API traffic reaches the service through ALB or another proxy.
+
+Expected behavior:
+
+- The current API limiter keys by the request source observed by Nest/Express.
+- Local or direct traffic is limited by the request IP.
+- Behind ALB/proxy, the observed source may be the ALB/proxy or another shared source, so unrelated clients can share the same limiter bucket.
+- Limiter state is process-local and is not distributed across API tasks.
+
+Protection:
+
+- No trust proxy, `X-Forwarded-For` tracker, Redis-backed throttler, or distributed/shared limiter is implemented in the MVP.
+- Before real multi-client traffic, implement proxy-aware and distributed rate limiting or accept this as a known limitation.
 
 ## PostgreSQL Unavailable
 
@@ -179,7 +195,7 @@ Expected behavior:
 
 Protection:
 
-- Worker reloads durable state from PostgreSQL and validates references before mutation.
+- Worker reloads durable state from PostgreSQL and validates the referenced payment intent before mutation.
 - The MVP does not infer or create payment intents from external events.
 
 ## Conflicting Provider Payload
@@ -202,4 +218,4 @@ Expected behavior for domain mismatch during worker processing:
 Protection:
 
 - Unique `(provider, external_event_id)` plus `payload_hash`.
-- Worker validation for amount, asset, reference, and state transition rules.
+- Worker validation for amount, asset, transaction hash, and state transition rules. `reference` is not part of the signed webhook DTO, so an unknown `reference` field is rejected before worker processing.

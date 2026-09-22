@@ -1,23 +1,22 @@
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
-import { DataSource } from 'typeorm';
 
-import { WEBHOOK_EVENTS_QUEUE } from '../processing/queue.constants';
 import { HealthController } from './health.controller';
 import { HealthService } from './health.service';
+import { PostgresHealthCheckService } from './postgres-health-check.service';
+import { RedisHealthCheckService } from './redis-health-check.service';
 
 describe('HealthController', () => {
   let controller: HealthController;
-  let dataSource: Pick<DataSource, 'isInitialized' | 'query'>;
-  let redisClient: { ping: jest.Mock<Promise<string>, []> };
+  let postgresHealthCheck: { check: jest.Mock<Promise<void>, []> };
+  let redisHealthCheck: { check: jest.Mock<Promise<void>, []> };
 
   beforeEach(async () => {
-    dataSource = {
-      isInitialized: true,
-      query: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
+    postgresHealthCheck = {
+      check: jest.fn().mockResolvedValue(undefined),
     };
-    redisClient = {
-      ping: jest.fn().mockResolvedValue('PONG'),
+    redisHealthCheck = {
+      check: jest.fn().mockResolvedValue(undefined),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -43,14 +42,12 @@ describe('HealthController', () => {
           },
         },
         {
-          provide: DataSource,
-          useValue: dataSource,
+          provide: PostgresHealthCheckService,
+          useValue: postgresHealthCheck,
         },
         {
-          provide: WEBHOOK_EVENTS_QUEUE,
-          useValue: {
-            client: Promise.resolve(redisClient),
-          },
+          provide: RedisHealthCheckService,
+          useValue: redisHealthCheck,
         },
       ],
     }).compile();
@@ -73,12 +70,12 @@ describe('HealthController', () => {
         redis: 'ok',
       },
     });
-    expect(dataSource.query).toHaveBeenCalledWith('SELECT 1');
-    expect(redisClient.ping).toHaveBeenCalledTimes(1);
+    expect(postgresHealthCheck.check).toHaveBeenCalledTimes(1);
+    expect(redisHealthCheck.check).toHaveBeenCalledTimes(1);
   });
 
   it('reports readiness failure when PostgreSQL is unavailable', async () => {
-    dataSource.query = jest.fn().mockRejectedValue(new Error('db down'));
+    postgresHealthCheck.check.mockRejectedValue(new Error('db down'));
 
     await expect(controller.getReadiness()).rejects.toMatchObject({
       response: {
@@ -89,7 +86,7 @@ describe('HealthController', () => {
   });
 
   it('reports readiness failure when Redis is unavailable', async () => {
-    redisClient.ping.mockRejectedValue(new Error('redis down'));
+    redisHealthCheck.check.mockRejectedValue(new Error('redis down'));
 
     await expect(controller.getReadiness()).rejects.toMatchObject({
       response: {
@@ -99,22 +96,27 @@ describe('HealthController', () => {
     });
   });
 
-  it('reports readiness failure when Redis ping does not settle', async () => {
-    jest.useFakeTimers();
-    redisClient.ping.mockReturnValue(new Promise(() => undefined));
+  it('returns serving readiness for configuration and PostgreSQL without Redis', async () => {
+    await expect(controller.getServingReadiness()).resolves.toMatchObject({
+      status: 'ready',
+      checks: {
+        config: 'ok',
+        postgres: 'ok',
+      },
+    });
+    expect(postgresHealthCheck.check).toHaveBeenCalledTimes(1);
+    expect(redisHealthCheck.check).not.toHaveBeenCalled();
+  });
 
-    try {
-      const readiness = expect(controller.getReadiness()).rejects.toMatchObject({
-        response: {
-          error: 'SERVICE_UNAVAILABLE',
-          details: [{ dependency: 'redis' }],
-        },
-      });
+  it('reports serving readiness failure when PostgreSQL is unavailable', async () => {
+    postgresHealthCheck.check.mockRejectedValue(new Error('db down'));
 
-      await jest.advanceTimersByTimeAsync(1_000);
-      await readiness;
-    } finally {
-      jest.useRealTimers();
-    }
+    await expect(controller.getServingReadiness()).rejects.toMatchObject({
+      response: {
+        error: 'SERVICE_UNAVAILABLE',
+        message: 'PostgreSQL readiness check failed.',
+        details: [{ dependency: 'postgres' }],
+      },
+    });
   });
 });

@@ -13,9 +13,10 @@ cluster/API/worker service resources. It also includes the minimal ECS task
 execution role, CloudWatch log groups, and Secrets Manager placeholders needed
 by those task definitions, plus a configurable private VPC endpoint egress path
 for ECR image pulls, CloudWatch Logs, Secrets Manager runtime secrets, and
-S3-backed ECR layer access. The Terraform backend/state decision is documented,
-but no remote backend is configured or enabled. It is not ready for `apply` and
-does not require AWS credentials for formatting or validation.
+S3-backed ECR layer access. Terraform backend support is enabled with an empty
+S3 backend block, and the backend/state decision is documented, but no remote
+backend is initialized. It is not ready for `apply` and does not require AWS
+credentials for formatting or validation.
 
 The ECR image publishing path is documented in
 [`../../docs/ecr-image-publishing.md`](../../docs/ecr-image-publishing.md), but
@@ -118,7 +119,7 @@ The resource implementation should continue in small phases after review:
 | `api_desired_count` | Desired number of API ECS service tasks. Defaults to `1` for scaffold review. |
 | `worker_desired_count` | Desired number of worker ECS service tasks. Defaults to `1` for scaffold review. |
 | `ecs_log_retention_days` | CloudWatch Logs retention for API, worker, and migration task log groups. |
-| `app_environment_variables` | Additional or overriding non-secret environment variables injected into all ECS task definitions. Base defaults include `NODE_ENV=production`, `PORT=3000`, `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS=300`, `OUTBOX_DISPATCH_ENABLED=true`, and `OUTBOX_DISPATCH_INTERVAL_MS=1000`; do not place secrets here. |
+| `app_environment_variables` | Additional or overriding non-secret environment variables injected into all ECS task definitions. Base defaults include `NODE_ENV=production`, `PORT=3000`, `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS=300`, `OUTBOX_DISPATCH_ENABLED=true`, `OUTBOX_DISPATCH_INTERVAL_MS=1000`, and reserved `OUTBOX_MAX_ATTEMPTS=10`; do not place secrets here. Transient outbox publish failures retry indefinitely, so do not rely on `OUTBOX_MAX_ATTEMPTS` to limit Redis outage retries. |
 | `create_vpc` | Future switch for managed VPC creation. Current scaffold does not create VPC resources. |
 | `vpc_id` | Existing VPC ID for security groups. |
 | `public_subnet_ids` | Public subnets intended for a future ALB. |
@@ -150,7 +151,7 @@ The resource implementation should continue in small phases after review:
 | `redis_transit_encryption_enabled` | Redis in-transit encryption switch. Defaults to `false` because current app config validates `redis://` URLs only. |
 | `redis_snapshot_retention_limit` | Redis automatic snapshot retention in days. Defaults to `7`; use `0` to disable snapshots. |
 | `redis_apply_immediately` | Whether Redis changes should apply immediately. Defaults to `false` so reviewed changes can wait for the next maintenance window. |
-| `health_check_path` | Future ALB health check path. Defaults to `/health/ready`. |
+| `health_check_path` | Future ALB health check path. Defaults to `/health/serving` (configuration and PostgreSQL only). |
 | `tags` | Additional non-secret tags for future AWS resources. |
 
 ## Current resource scope
@@ -201,7 +202,7 @@ ECS task log group, and private VPC endpoint resources:
 - `aws_lb.api`: internet-facing Application Load Balancer in
   `public_subnet_ids`, using the ALB security group.
 - `aws_lb_target_group.api`: HTTP target group on `app_port` with
-  `target_type = "ip"` for future ECS Fargate API tasks and `/health/ready`
+  `target_type = "ip"` for future ECS Fargate API tasks and `/health/serving`
   health checks.
 - `aws_lb_listener.http`: MVP HTTP listener on `alb_port` that forwards to the
   API target group. Until an approved deployment registers healthy API targets,
@@ -271,11 +272,11 @@ approved non-production webhook values, an approved evidence path, and result
 recording. This scaffold does not add smoke automation or prove that a deployed
 API is reachable.
 
-The target group health check uses `/health/ready`. That endpoint checks
-required app configuration, PostgreSQL, and Redis readiness. This intentionally
-favors removing API tasks from ALB rotation when async processing dependencies
-are unhealthy, but it also means Redis incidents can remove API tasks even
-though some durable PostgreSQL-backed writes may still work. See
+The target group health check uses `/health/serving`. That endpoint checks
+required app configuration and PostgreSQL through the application's isolated
+health pool, excluding Redis so Redis incidents do not drain API tasks that can
+still accept durable PostgreSQL-backed writes. Full `/health/ready` still checks
+configuration, PostgreSQL, and Redis for operators and deploy gates. See
 [`../../docs/aws-deployment-design.md`](../../docs/aws-deployment-design.md) for
 the deployment trade-off.
 
@@ -369,11 +370,12 @@ scaffold defaults favor no-apply review, not production durability.
 
 ## State backend decision
 
-No remote backend is configured or enabled in this scaffold. The committed
-Terraform files intentionally do not contain a `backend` block. During local
-review and CI-style validation, use `terraform init -backend=false`; this keeps
-validation independent from AWS credentials and avoids creating Terraform
-state.
+Backend support is enabled in this scaffold with an empty `backend "s3" {}`
+block. No real backend values are committed, no remote backend is initialized,
+no state bucket or lock table was created by this phase, and no live Terraform
+command was run. During local review and CI-style validation, use
+`terraform init -backend=false`; this keeps validation independent from AWS
+credentials and avoids creating Terraform state.
 
 Before any first apply, the deployment owner must approve the Terraform state
 owner, region, S3 state bucket, encryption policy, access model, and locking

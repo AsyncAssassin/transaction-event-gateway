@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { randomUUID } from 'crypto';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 
 import { AppConfigModule } from '../src/config/config.module';
 import { DatabaseModule } from '../src/database/database.module';
@@ -245,6 +245,112 @@ describe('Webhook event processor (e2e)', () => {
       confirmedTxHash: null,
     });
   });
+
+  it('confirms a payment intent already in PROCESSING', async () => {
+    const paymentIntentId = await insertPaymentIntent(dataSource, {
+      status: PaymentIntentStatus.Processing,
+    });
+    const webhookEventId = await insertWebhookEvent(dataSource, {
+      paymentIntentId,
+      txHash: '0xprocessing-confirm',
+    });
+
+    await expect(
+      processor.processWebhookEvent({
+        webhookEventId,
+        jobId: 'job-processing',
+      }),
+    ).resolves.toEqual({ status: 'processed' });
+
+    await expectPaymentIntent(dataSource, paymentIntentId, {
+      status: 'CONFIRMED',
+      confirmedTxHash: '0xprocessing-confirm',
+    });
+  });
+
+  it('marks an unsupported event type as FAILED without mutating the payment intent', async () => {
+    const paymentIntentId = await insertPaymentIntent(dataSource);
+    const webhookEventId = await insertWebhookEvent(dataSource, {
+      paymentIntentId,
+      type: 'transaction.reversed',
+      txHash: '0xunsupported',
+    });
+
+    await expect(
+      processor.processWebhookEvent({
+        webhookEventId,
+        jobId: 'job-unsupported',
+      }),
+    ).resolves.toEqual({ status: 'failed', reason: 'UNSUPPORTED_EVENT_TYPE' });
+
+    await expectPaymentIntent(dataSource, paymentIntentId, {
+      status: 'CREATED',
+      confirmedTxHash: null,
+    });
+    await expectWebhookEvent(dataSource, webhookEventId, {
+      status: 'FAILED',
+      failureReason: 'UNSUPPORTED_EVENT_TYPE',
+    });
+  });
+
+  it('fails when the transaction hash already confirms another payment intent', async () => {
+    const sharedTxHash = '0xshared-confirmed';
+    await insertPaymentIntent(dataSource, {
+      status: PaymentIntentStatus.Confirmed,
+      confirmedTxHash: sharedTxHash,
+    });
+    const targetPaymentIntentId = await insertPaymentIntent(dataSource);
+    const webhookEventId = await insertWebhookEvent(dataSource, {
+      paymentIntentId: targetPaymentIntentId,
+      txHash: sharedTxHash,
+    });
+
+    await expect(
+      processor.processWebhookEvent({ webhookEventId, jobId: 'job-conflict' }),
+    ).resolves.toEqual({
+      status: 'failed',
+      reason: 'CONFIRMED_TX_HASH_CONFLICT',
+    });
+
+    await expectPaymentIntent(dataSource, targetPaymentIntentId, {
+      status: 'CREATED',
+      confirmedTxHash: null,
+    });
+    await expectWebhookEvent(dataSource, webhookEventId, {
+      status: 'FAILED',
+      failureReason: 'CONFIRMED_TX_HASH_CONFLICT',
+    });
+  });
+
+  it('rolls back and leaves state unchanged when the transaction throws before commit', async () => {
+    const paymentIntentId = await insertPaymentIntent(dataSource);
+    const webhookEventId = await insertWebhookEvent(dataSource, {
+      paymentIntentId,
+      txHash: '0xcrash-before-commit',
+    });
+
+    const saveSpy = jest
+      .spyOn(EntityManager.prototype, 'save')
+      .mockImplementationOnce(() => {
+        throw new Error('CRASH_BEFORE_COMMIT');
+      });
+
+    await expect(
+      processor.processWebhookEvent({ webhookEventId, jobId: 'job-crash' }),
+    ).rejects.toThrow('CRASH_BEFORE_COMMIT');
+
+    saveSpy.mockRestore();
+
+    await expectPaymentIntent(dataSource, paymentIntentId, {
+      status: 'CREATED',
+      confirmedTxHash: null,
+    });
+    await expectWebhookEvent(dataSource, webhookEventId, {
+      status: 'RECEIVED',
+      failureReason: null,
+    });
+    await expectAttemptRows(dataSource, webhookEventId, []);
+  });
 });
 
 async function insertPaymentIntent(
@@ -254,6 +360,7 @@ async function insertPaymentIntent(
     amount: string;
     asset: string;
     reference: string | null;
+    confirmedTxHash: string | null;
   }> = {},
 ): Promise<string> {
   const paymentIntentId = randomUUID();
@@ -281,7 +388,7 @@ async function insertPaymentIntent(
         $5,
         NULL,
         '{}'::jsonb,
-        NULL,
+        $6,
         NULL
       )
     `,
@@ -291,6 +398,7 @@ async function insertPaymentIntent(
       overrides.amount ?? '125.50',
       overrides.asset ?? 'USDC',
       overrides.reference ?? 'order-1001',
+      overrides.confirmedTxHash ?? null,
     ],
   );
 
@@ -306,13 +414,15 @@ async function insertWebhookEvent(
     amount: string;
     asset: string;
     reference: string;
+    type: string;
   }> = {},
 ): Promise<string> {
   const webhookEventId = randomUUID();
   const paymentIntentId = overrides.paymentIntentId ?? randomUUID();
+  const type = overrides.type ?? 'transaction.confirmed';
   const payload = {
     eventId: `evt_${webhookEventId}`,
-    type: 'transaction.confirmed',
+    type,
     paymentIntentId,
     txHash: overrides.txHash ?? `0x${webhookEventId.replace(/-/g, '')}`,
     amount: overrides.amount ?? '125.50',

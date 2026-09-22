@@ -41,5 +41,14 @@ export function createTypeOrmModuleOptions(
 ): TypeOrmModuleOptions {
   return {
     ...createPostgresDataSourceOptions(databaseUrl),
+    // Runtime-only pool bounds and connect timeout. Not applied to the CLI
+    // data source (src/database/data-source.ts) so migrations stay unbounded.
+    // statement_timeout is intentionally omitted here: a global per-statement
+    // timeout would abort worker transactions waiting on row locks.
+    extra: {
+      max: 10,
+      connectionTimeoutMillis: 5_000,
+      idleTimeoutMillis: 30_000,
+    },
   };
 }

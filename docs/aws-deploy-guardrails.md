@@ -80,8 +80,9 @@ tear down before cost grows unnoticed.
   - explicit approval required: NAT Gateway;
   - short-lived compromise: only if the network and cost trade-off is written
     down before apply.
-- Remote Terraform backend enablement. The backend/state decision is documented,
-  but no remote backend is configured or enabled yet; first apply requires an
+- Remote Terraform backend initialization. Backend support is enabled with an
+  empty S3 backend block, but no remote backend is initialized yet and no state
+  bucket or lock table was created by this phase; first apply requires an
   approved state owner and backend config outside git.
 - One-off migration task flow is documented in
   [One-off ECS migration task flow](aws-migration-task-flow.md), but the live

@@ -176,8 +176,8 @@ Implemented worker transition behavior:
 
 | Current payment intent status | Matching confirmed webhook result | Payment intent effect | Webhook effect |
 | --- | --- | --- | --- |
-| `CREATED` | amount, asset, optional reference, and transaction hash are valid | `CONFIRMED`, `confirmedTxHash` set | `PROCESSED` |
-| `PROCESSING` | amount, asset, optional reference, and transaction hash are valid | `CONFIRMED`, `confirmedTxHash` set | `PROCESSED` |
+| `CREATED` | amount, asset, and transaction hash are valid | `CONFIRMED`, `confirmedTxHash` set | `PROCESSED` |
+| `PROCESSING` | amount, asset, and transaction hash are valid | `CONFIRMED`, `confirmedTxHash` set | `PROCESSED` |
 | `CONFIRMED` | same `confirmedTxHash` | No payment intent change | `PROCESSED` |
 | `CONFIRMED` | different transaction hash after other validation passes | No payment intent change | `FAILED` with `PAYMENT_INTENT_TERMINAL` |
 | `FAILED` | any otherwise valid confirmed webhook | No payment intent change | `FAILED` with `PAYMENT_INTENT_TERMINAL` |
@@ -285,7 +285,6 @@ domain result and returns normally; correctness is stored in PostgreSQL.
 | `MISSING_TX_HASH` | Confirmed transaction event has no non-empty string transaction hash. | Webhook `FAILED`; no payment intent mutation. |
 | `AMOUNT_MISMATCH` | Payload amount does not normalize to the payment intent amount. | Webhook `FAILED`; no payment intent mutation. |
 | `ASSET_MISMATCH` | Payload asset differs from the payment intent asset. | Webhook `FAILED`; no payment intent mutation. |
-| `REFERENCE_MISMATCH` | Persisted payload contains a string reference and it differs from the payment intent reference. | Webhook `FAILED`; no payment intent mutation. |
 | `PAYMENT_INTENT_TERMINAL` | Payment intent is `FAILED` or `EXPIRED`, or it is `CONFIRMED` with a different transaction hash after validation passes. | Webhook `FAILED`; terminal payment intent remains unchanged. |
 | `CONFIRMED_TX_HASH_CONFLICT` | Transaction hash is already attached to another payment intent. | Webhook `FAILED`; current payment intent remains unchanged. |
 
@@ -412,7 +411,7 @@ Worker
   -> lock webhook_events row
   -> exit successfully if already PROCESSED
   -> mark webhook_events PROCESSING
-  -> validate event type, tx hash, payment intent, amount, asset, reference, and terminal state
+  -> validate event type, tx hash, payment intent, amount, asset, and terminal state
   -> lock payment_intents row when present
   -> confirm matching payment intent or record durable webhook failure
   -> insert webhook_processing_attempts

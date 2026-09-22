@@ -43,6 +43,10 @@ export class WebhookEventsWorkerService
           age: 3_600,
           count: 1_000,
         },
+        removeOnFail: {
+          age: 7 * 24 * 3_600,
+          count: 5_000,
+        },
       },
     );
 

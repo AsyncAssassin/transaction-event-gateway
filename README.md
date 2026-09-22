@@ -56,7 +56,7 @@ Main reliability boundaries:
 - BullMQ jobs contain only the durable `webhookEventId`.
 - Worker processing reloads state from PostgreSQL, uses row locks, and is safe under duplicate jobs.
 - Correlation IDs and structured logging are enabled for HTTP requests and error responses.
-- `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis.
+- `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis; `/health/serving` checks configuration and PostgreSQL for load balancer routing.
 
 Detailed documentation:
 
@@ -107,12 +107,14 @@ Review [AWS deploy guardrails](docs/aws-deploy-guardrails.md) before any live
 AWS usage; budgets, billing notifications, region choice, deployment
 prerequisites, and teardown ownership must be clear first.
 
-Terraform backend/state handling is documented but not enabled. Local scaffold
-validation remains `terraform init -backend=false`; no active backend block is
-committed. A future remote backend should use an approved S3 state bucket with
-encryption and an approved locking mechanism, with backend values supplied
-through an ignored `infra/terraform/backend.hcl` file or an explicitly approved
-command. Terraform state files and real backend values must not be committed.
+Terraform backend support is enabled with an empty `backend "s3" {}` block, but
+no remote backend was initialized here. Local scaffold validation remains
+`terraform init -backend=false`; no state bucket or lock table was created by
+this phase, and no live Terraform command was run. A future remote backend
+should use an approved S3 state bucket with encryption and an approved locking
+mechanism, with backend values supplied through an ignored
+`infra/terraform/backend.hcl` file or an explicitly approved command.
+Terraform state files and real backend values must not be committed.
 
 The ECR image publishing path is documented but not executed. No image has
 been published to ECR, no registry authentication is configured, and no deploy
@@ -172,11 +174,16 @@ Configuration is validated at startup. Use `.env.example` as the local template.
 | `NODE_ENV` | Runtime mode: `development`, `test`, or `production`. |
 | `PORT` | API HTTP port. Defaults to `3000`. |
 | `DATABASE_URL` | PostgreSQL connection URL. Required by API, worker, migrations, and tests. |
-| `REDIS_URL` | Redis connection URL for BullMQ. Required by API readiness and worker processing. |
+| `REDIS_URL` | Redis connection URL for BullMQ and full readiness. Required by worker processing. |
 | `WEBHOOK_SECRET` | HMAC secret used to verify `POST /webhooks/blockchain`. Must be at least 16 characters. |
 | `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS` | Accepted webhook timestamp skew window. Defaults to `300`. |
 | `OUTBOX_DISPATCH_ENABLED` | Enables the dispatcher runner in the worker process. Defaults to `true`. |
 | `OUTBOX_DISPATCH_INTERVAL_MS` | Dispatcher polling interval in milliseconds. Defaults to `1000`. |
+| `OUTBOX_MAX_ATTEMPTS` | Reserved/deprecated from earlier bounded retry behavior. Transient outbox publish failures retry indefinitely with capped backoff; do not rely on this to limit Redis outage retries. Defaults to `10` while the runtime still accepts it. |
+| `RATE_LIMIT_ENABLED` | Enables process-local, in-memory request rate limiting on each API instance. Defaults to `true`. |
+| `RATE_LIMIT_TTL_SECONDS` | Rate limit window in seconds. Defaults to `60`. |
+| `RATE_LIMIT_LIMIT` | Max requests per window per observed request source as seen by Nest/Express. Local/direct deployments use the request IP. Behind ALB/proxy, this is not guaranteed to be the real end-client IP until explicit trust proxy / `X-Forwarded-For` handling is implemented. Defaults to `100`. |
+| `SWAGGER_ENABLED` | In `production`, serves Swagger/OpenAPI only when `true`. Non-production always serves it. Defaults to `false`. |
 
 ## Local Run
 
@@ -232,7 +239,8 @@ Swagger/OpenAPI:
 Health endpoints:
 
 - `GET http://localhost:3000/health/live`
-- `GET http://localhost:3000/health/ready`
+- `GET http://localhost:3000/health/ready` (config, PostgreSQL, Redis; for operators and deploy gates)
+- `GET http://localhost:3000/health/serving` (config and PostgreSQL only; load balancer target)
 
 ## API Examples
 
@@ -325,6 +333,8 @@ Webhook acceptance writes a `webhook_events` inbox row and an `outbox_events` ro
 
 The worker process starts the dispatcher runner and the BullMQ consumer. The dispatcher selects pending or retryable outbox rows, publishes jobs to Redis/BullMQ, marks webhook events as `QUEUED`, and marks outbox rows as `PUBLISHED` after publication succeeds.
 
+Transient Redis, BullMQ, or publisher failures leave the accepted webhook durable in PostgreSQL. The outbox row becomes or remains `FAILED` with incremented `attempts`, sanitized `last_error`, capped `next_attempt_at`, and `dead_at = null`; the dispatcher retries indefinitely while the dependency is unavailable. Deterministic poison payloads, such as a missing or non-string `webhookEventId`, are non-retryable and are marked `FAILED` with `dead_at` set. If the BullMQ `Queue` object is poisoned, the publisher recreates it and retries the publish once before returning a transient failure to the outbox.
+
 Dispatcher behavior is controlled by `OUTBOX_DISPATCH_ENABLED` and `OUTBOX_DISPATCH_INTERVAL_MS`. Jobs contain only `webhookEventId`, so duplicate publication or duplicate delivery is safe: the worker reloads the durable webhook event, locks rows in PostgreSQL, checks current status, and records processing attempts.
 
 Operational troubleshooting notes are in `docs/runbook.md`.
@@ -338,13 +348,13 @@ Operational troubleshooting notes are in `docs/runbook.md`.
 - Webhook inbox and outbox rows commit in the same PostgreSQL transaction, avoiding a database/queue dual-write gap.
 - Outbox publication is at-least-once; duplicate BullMQ jobs are safe because the worker reloads durable rows and checks current state under row locks.
 - Worker processing records sanitized attempts and leaves payment intent state unchanged on domain mismatches.
-- Readiness checks required configuration, PostgreSQL, and Redis so degraded queue infrastructure is visible before accepting traffic in strict deployments.
+- `/health/ready` checks configuration, PostgreSQL through an isolated bounded health pool, and Redis through an independent probe for operators and deploy gates. `/health/serving` checks configuration and the isolated PostgreSQL health pool only and is the load balancer health-check target, so a Redis incident does not remove API tasks that can still accept payment intents and webhooks.
 
 ## Observability
 
 - Structured logs include correlation IDs, request metadata, safe entity identifiers, statuses, and error codes.
 - `X-Correlation-ID` is accepted on inbound requests; missing values are generated and returned in responses.
-- `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis.
+- `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis. `/health/serving` excludes Redis for load balancer serving readiness.
 - Swagger UI and OpenAPI JSON are exposed at `/docs` and `/docs/openapi.json` for the implemented API surface.
 - The smoke script exercises the full local path from health and OpenAPI through idempotency, signed webhook acceptance, outbox publication, worker processing, and final database state.
 - `docs/runbook.md` contains local inspection queries for payment intents, webhook events, outbox rows, and processing attempts.
@@ -398,15 +408,15 @@ The smoke script checks health, OpenAPI, payment intent idempotency, signed webh
 - **Idempotency replay**: same key and same payload returns the stored response with `Idempotent-Replayed: true`.
 - **Idempotency conflict**: same key and different payload returns `409 IDEMPOTENCY_CONFLICT`.
 - **Invalid webhook signature**: returns `401 INVALID_WEBHOOK_SIGNATURE`; no inbox or outbox row is written.
-- **Stale timestamp**: returns `408 STALE_WEBHOOK_TIMESTAMP`; no inbox or outbox row is written.
+- **Stale timestamp**: returns `400 STALE_WEBHOOK_TIMESTAMP`; no inbox or outbox row is written.
 - **Duplicate webhook**: same provider event ID and same payload returns `202 ALREADY_ACCEPTED`.
 - **Nonce replay**: reused nonce for a different event returns `409 WEBHOOK_NONCE_REPLAY`.
-- **Redis unavailable**: payment intent creation and webhook acceptance can still persist durable state; dispatching and worker processing pause.
+- **Redis unavailable**: payment intent creation and webhook acceptance can still persist durable state; `/health/ready` returns unavailable, `/health/serving` can remain healthy when configuration and PostgreSQL are healthy, and dispatching/worker processing waits and retries.
 - **PostgreSQL unavailable**: durable API operations return `503 SERVICE_UNAVAILABLE`.
-- **Queue publish failure**: the outbox row remains pending or retryable with backoff metadata.
+- **Queue publish failure**: the outbox row remains `FAILED` and retryable with attempts, sanitized error text, capped backoff metadata, and no `dead_at` for transient failures.
 - **Worker crash or retry**: PostgreSQL rollback and BullMQ retry preserve correctness; already processed events complete safely.
 - **Unknown payment intent**: worker marks the webhook event `FAILED` with `UNKNOWN_PAYMENT_INTENT`.
-- **Mismatch failures**: amount, asset, reference, terminal-state, or confirmed transaction hash conflicts fail the webhook without corrupting payment intent state.
+- **Mismatch failures**: amount, asset, terminal-state, or confirmed transaction hash conflicts fail the webhook without corrupting payment intent state.
 
 ## Project Status
 
@@ -416,13 +426,16 @@ Manual retry endpoint, metrics dashboards, authentication, authorization, and re
 
 The AWS Terraform scaffold is implemented for structure review and validation,
 and the ECR image publishing path, one-off ECS migration task flow, and deployed
-smoke test flow are now documented. No image publication, one-off migration
-run, deployed smoke test, remote Terraform backend enablement, secret value
+smoke test flow are now documented. Terraform backend support is enabled with
+an empty S3 backend block, but no remote backend initialization, image
+publication, one-off migration run, deployed smoke test, secret value
 population, Terraform apply, or live deployment has been completed.
 
 ## MVP Boundaries
 
 This MVP does not provide custody, private key storage, wallet functionality, signing, real funds movement, or a real blockchain/provider integration. It does not include authentication, authorization, multitenancy, a manual retry API, admin UI, metrics dashboards, alerting, tracing, autoscaling, deployment automation, or a live AWS environment.
+
+Public endpoints enforce a request body size limit and process-local, in-memory rate limiting based on the request source observed by Nest/Express. Local or direct deployments use the request IP; behind ALB/proxy, the observed source may be the ALB/proxy or another shared source. The current MVP does not implement trust proxy / `X-Forwarded-For` handling or a distributed/shared limiter, so accurate per-client IP limiting across ECS tasks is a production traffic prerequisite or known limitation. A retention or cleanup job for the durable tables is also deferred: the tables grow until a future retention policy is added. `idempotency_records.expires_at` is populated so that future cleanup has data to act on, but no cleanup runs yet.
 
 Terraform currently defines an infrastructure skeleton only. Real deployment
 still requires approved backend configuration and state ownership, approved

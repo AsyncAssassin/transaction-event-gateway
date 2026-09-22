@@ -119,15 +119,15 @@ Content-Type: application/json
 - `reference` is optional and limited to 255 characters.
 - `clientRequestId` is optional and limited to 255 characters.
 - `metadata` is optional from the caller perspective and defaults to `{}` when omitted.
-- Unsupported assets, invalid amount semantics, or invalid destination semantics return `422 Unprocessable Entity`.
+- Unsupported assets, invalid amount semantics, or invalid destination semantics return `400 Bad Request` with `VALIDATION_ERROR` and field-level `details`.
 
 ### Error Responses
 
 | Status | Error code | Case |
 | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Missing `Idempotency-Key`, invalid JSON, or DTO validation failure |
+| 400 | `VALIDATION_ERROR` | Missing `Idempotency-Key`, invalid JSON, DTO validation failure, unsupported asset, invalid amount, or invalid destination |
 | 409 | `IDEMPOTENCY_CONFLICT` | Same idempotency key was already used with a different logical request payload |
-| 422 | `UNPROCESSABLE_PAYMENT_INTENT` | Unsupported asset, invalid amount, or invalid destination |
+| 413 | `PAYLOAD_TOO_LARGE` | Request body exceeds the configured size limit |
 | 503 | `SERVICE_UNAVAILABLE` | PostgreSQL is unavailable |
 
 Conflict example:
@@ -156,6 +156,8 @@ Rules:
 - The database unique constraint on `(scope, idempotency_key)` is the concurrency guard.
 - The response snapshot must be stored before the transaction commits.
 - Idempotency correctness must not depend on Redis, in-memory locks, or queue uniqueness.
+- Idempotency keys share one global scope (`payment-intents:create`) because the MVP has no authentication or tenancy. Two unrelated callers that reuse the same key with the same payload receive the same stored response, and with a different payload receive `409`. Isolating keys per caller is future work tied to authentication.
+- The request hash is a byte-exact canonicalization (sorted keys) of the logical payload. Numeric strings are not normalized: reusing a key with `"125.50"` and then `"125.5"` is a `409` conflict, so a retried request must send a byte-stable body.
 
 ## POST /webhooks/blockchain
 
@@ -239,6 +241,7 @@ The payload is not persisted and no outbox event is created when signature valid
 - `paymentIntentId` is required for MVP processing events and must be a UUID.
 - `txHash` is optional at transport level but required for confirmed transaction events.
 - `amount` and `asset` must match the referenced payment intent during worker processing.
+- `reference` is not part of the signed webhook body; unknown fields are rejected by DTO validation before worker processing.
 
 ### Error Responses
 
@@ -246,7 +249,7 @@ The payload is not persisted and no outbox event is created when signature valid
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | Missing required headers, invalid JSON, or invalid payload shape |
 | 401 | `INVALID_WEBHOOK_SIGNATURE` | HMAC verification failed |
-| 408 | `STALE_WEBHOOK_TIMESTAMP` | Timestamp is outside the configured tolerance window |
+| 400 | `STALE_WEBHOOK_TIMESTAMP` | Timestamp is outside the configured tolerance window |
 | 409 | `WEBHOOK_EVENT_CONFLICT` | Same provider event ID was seen with a different payload hash |
 | 409 | `WEBHOOK_NONCE_REPLAY` | Same provider nonce was reused with a different event |
 | 503 | `SERVICE_UNAVAILABLE` | PostgreSQL is unavailable |

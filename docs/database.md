@@ -161,6 +161,7 @@ status outbox_event_status not null
 attempts integer not null default 0
 next_attempt_at timestamptz null
 last_error text null
+dead_at timestamptz null
 created_at timestamptz not null
 published_at timestamptz null
 updated_at timestamptz not null
@@ -172,6 +173,7 @@ Indexes and constraints:
 primary key (id)
 index outbox_events_status_next_attempt_idx (status, next_attempt_at)
 index outbox_events_aggregate_idx (aggregate_type, aggregate_id)
+index outbox_events_dead_at_idx (dead_at) where dead_at is not null
 check outbox_events_attempts_non_negative_chk (attempts >= 0)
 ```
 
@@ -180,7 +182,7 @@ Correctness rationale:
 - Outbox records prevent accepted webhook events from being lost when Redis publication fails.
 - Pending status index keeps dispatcher polling efficient.
 - Aggregate index links each outbox event to the durable webhook event.
-- Attempt metadata supports bounded retry with backoff and sanitized error reporting.
+- Attempt metadata supports retry with capped backoff and sanitized error reporting. Transient Redis, BullMQ, or publisher failures remain retryable indefinitely with `dead_at` unset. Deterministic poison outbox payloads, such as a missing or non-string `webhookEventId`, are non-retryable and set `dead_at`; the partial `dead_at` index keeps those rows out of dispatcher polling and cheap to inspect.
 - Duplicate publication is acceptable because worker processing is idempotent.
 
 ### webhook_processing_attempts
@@ -261,7 +263,8 @@ Dispatcher operation should:
 - Select eligible `PENDING` or retryable `FAILED` outbox rows using row locks.
 - Publish a BullMQ job containing durable IDs only.
 - Mark the outbox row `PUBLISHED` after publication succeeds.
-- Record attempts, next retry time, and sanitized errors when publication fails.
+- Record attempts, next retry time, and sanitized errors when transient publication fails.
+- Mark deterministic poison outbox payloads `FAILED` with `dead_at` instead of retrying them.
 
 Publishing to Redis and updating PostgreSQL is not atomic across systems, so duplicate publication must remain safe.
 
@@ -273,7 +276,7 @@ One transaction must include:
 - Exit successfully if already `PROCESSED`.
 - Mark the event `PROCESSING`.
 - Lock the target `payment_intents` row.
-- Validate amount, asset, reference, and state transition rules.
+- Validate amount, asset, transaction hash, and state transition rules. The signed webhook DTO does not include `reference`; unknown `reference` properties are rejected by DTO validation before worker processing.
 - Apply payment intent state transition.
 - Mark webhook event `PROCESSED` or durable `FAILED`.
 - Insert a `webhook_processing_attempts` row.

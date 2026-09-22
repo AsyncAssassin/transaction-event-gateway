@@ -12,6 +12,8 @@ import {
 import { OutboxDispatcherService } from './outbox-dispatcher.service';
 
 const DEFAULT_OUTBOX_DISPATCH_INTERVAL_MS = 1_000;
+const RUNNER_BACKOFF_BASE_MS = 1_000;
+const RUNNER_BACKOFF_MAX_MS = 30_000;
 
 @Injectable()
 export class OutboxDispatcherRunnerService
@@ -22,6 +24,8 @@ export class OutboxDispatcherRunnerService
   );
   private timer: ReturnType<typeof setInterval> | null = null;
   private inFlightDispatch: Promise<void> | null = null;
+  private consecutiveFailures = 0;
+  private cooldownUntilMs = 0;
 
   constructor(
     private readonly configService: ConfigService,
@@ -52,10 +56,21 @@ export class OutboxDispatcherRunnerService
       return;
     }
 
+    // Back off after repeated failures (for example a prolonged database
+    // outage) so the runner does not log once per tick until recovery.
+    if (Date.now() < this.cooldownUntilMs) {
+      return;
+    }
+
     this.inFlightDispatch = this.dispatcher
       .dispatchBatch()
-      .then(() => undefined)
+      .then(() => {
+        this.consecutiveFailures = 0;
+        this.cooldownUntilMs = 0;
+      })
       .catch((error: unknown) => {
+        this.consecutiveFailures += 1;
+        this.cooldownUntilMs = Date.now() + this.calculateCooldownMs();
         this.logger.warn('outbox_dispatch_runner_failed', {
           status: 'FAILED',
           errorCode: toSafeErrorCode(error, 'OUTBOX_DISPATCH_RUNNER_FAILED'),
@@ -64,6 +79,13 @@ export class OutboxDispatcherRunnerService
       .finally(() => {
         this.inFlightDispatch = null;
       });
+  }
+
+  private calculateCooldownMs(): number {
+    return Math.min(
+      RUNNER_BACKOFF_BASE_MS * 2 ** Math.max(0, this.consecutiveFailures - 1),
+      RUNNER_BACKOFF_MAX_MS,
+    );
   }
 
   private isEnabled(): boolean {

@@ -18,6 +18,7 @@ import { PROCESS_WEBHOOK_OUTBOX_TYPE } from '../webhooks/webhooks.types';
 const DEFAULT_OUTBOX_DISPATCH_BATCH_SIZE = 50;
 const OUTBOX_RETRY_BASE_DELAY_MS = 5_000;
 const OUTBOX_RETRY_MAX_DELAY_MS = 5 * 60_000;
+const INVALID_OUTBOX_PAYLOAD = 'INVALID_OUTBOX_PAYLOAD';
 
 export type OutboxDispatchBatchResult = {
   selected: number;
@@ -46,10 +47,30 @@ export class OutboxDispatcherService {
       };
 
       for (const outboxEvent of outboxEvents) {
-        let webhookEventId: string | undefined;
+        let webhookEventId: string;
 
         try {
           webhookEventId = getWebhookEventId(outboxEvent);
+        } catch (error) {
+          if (error instanceof NonRetryableOutboxError) {
+            await this.markNonRetryableFailure(manager, outboxEvent, error);
+            this.logger.warn('outbox_dispatch_poisoned', {
+              webhookEventId: outboxEvent.aggregateId,
+              status: OutboxEventStatus.Failed,
+              errorCode: toSafeErrorCode(error, INVALID_OUTBOX_PAYLOAD),
+            });
+          } else {
+            await this.markTransientFailure(manager, outboxEvent, error);
+            this.logger.warn('outbox_dispatch_failed', {
+              status: OutboxEventStatus.Failed,
+              errorCode: toSafeErrorCode(error, 'OUTBOX_DISPATCH_FAILED'),
+            });
+          }
+          result.failed += 1;
+          continue;
+        }
+
+        try {
           await this.jobPublisher.publishProcessWebhookEvent(webhookEventId);
           await this.markWebhookQueued(manager, webhookEventId);
           await this.markPublished(manager, outboxEvent.id);
@@ -59,7 +80,7 @@ export class OutboxDispatcherService {
           });
           result.published += 1;
         } catch (error) {
-          await this.markRetryableFailure(manager, outboxEvent, error);
+          await this.markTransientFailure(manager, outboxEvent, error);
           this.logger.warn('outbox_dispatch_failed', {
             webhookEventId,
             status: OutboxEventStatus.Failed,
@@ -81,6 +102,7 @@ export class OutboxDispatcherService {
       .getRepository(OutboxEventEntity)
       .createQueryBuilder('outbox')
       .where('outbox.type = :type', { type: PROCESS_WEBHOOK_OUTBOX_TYPE })
+      .andWhere('outbox.dead_at IS NULL')
       .andWhere(
         `(
           outbox.status = :pending
@@ -132,20 +154,43 @@ export class OutboxDispatcherService {
     );
   }
 
-  private async markRetryableFailure(
+  private async markTransientFailure(
     manager: EntityManager,
     outboxEvent: OutboxEventEntity,
     error: unknown,
   ): Promise<void> {
     const attempts = outboxEvent.attempts + 1;
-    const nextAttemptAt = new Date(Date.now() + calculateOutboxBackoffMs(attempts));
 
     await manager.update(OutboxEventEntity, outboxEvent.id, {
       status: OutboxEventStatus.Failed,
       attempts,
-      nextAttemptAt,
+      nextAttemptAt: new Date(Date.now() + calculateOutboxBackoffMs(attempts)),
+      deadAt: null,
       lastError: sanitizeErrorMessage(error),
     });
+  }
+
+  private async markNonRetryableFailure(
+    manager: EntityManager,
+    outboxEvent: OutboxEventEntity,
+    error: unknown,
+  ): Promise<void> {
+    const attempts = outboxEvent.attempts + 1;
+
+    await manager.update(OutboxEventEntity, outboxEvent.id, {
+      status: OutboxEventStatus.Failed,
+      attempts,
+      nextAttemptAt: null,
+      deadAt: new Date(),
+      lastError: sanitizeErrorMessage(error),
+    });
+  }
+}
+
+class NonRetryableOutboxError extends Error {
+  constructor(readonly code: typeof INVALID_OUTBOX_PAYLOAD) {
+    super(code);
+    this.name = 'NonRetryableOutboxError';
   }
 }
 
@@ -153,7 +198,7 @@ function getWebhookEventId(outboxEvent: OutboxEventEntity): string {
   const payload = outboxEvent.payload as { webhookEventId?: unknown };
 
   if (typeof payload.webhookEventId !== 'string') {
-    throw new Error('INVALID_OUTBOX_PAYLOAD');
+    throw new NonRetryableOutboxError(INVALID_OUTBOX_PAYLOAD);
   }
 
   return payload.webhookEventId;

@@ -11,7 +11,6 @@ import {
   ApiConflictResponse,
   ApiHeader,
   ApiOperation,
-  ApiRequestTimeoutResponse,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
@@ -40,12 +39,10 @@ export class WebhooksController {
   @ApiHeader({ name: 'X-Webhook-Signature', required: true })
   @ApiAcceptedResponse({ description: 'Webhook accepted or already accepted.' })
   @ApiBadRequestResponse({
-    description: 'Missing headers, invalid JSON, or invalid payload.',
+    description:
+      'Missing headers, invalid JSON, invalid payload, or a stale webhook timestamp (STALE_WEBHOOK_TIMESTAMP).',
   })
   @ApiUnauthorizedResponse({ description: 'Webhook signature is invalid.' })
-  @ApiRequestTimeoutResponse({
-    description: 'Webhook timestamp is outside the tolerance window.',
-  })
   @ApiConflictResponse({
     description: 'Webhook event ID conflict or nonce replay.',
   })
