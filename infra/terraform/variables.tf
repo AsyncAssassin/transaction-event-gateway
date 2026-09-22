@@ -1,5 +1,5 @@
 variable "aws_region" {
-  description = "AWS region intended for a future deployment. No credentials are configured in this scaffold."
+  description = "AWS region for all resources. No credentials are configured in this configuration."
   type        = string
   default     = "us-east-1"
 
@@ -10,7 +10,7 @@ variable "aws_region" {
 }
 
 variable "project_name" {
-  description = "Short ECR-safe project name used for future resource naming."
+  description = "Short ECR-safe project name used for resource names."
   type        = string
   default     = "transaction-event-gateway"
 
@@ -21,7 +21,7 @@ variable "project_name" {
 }
 
 variable "environment" {
-  description = "Short ECR-safe deployment environment name used for future resource naming and tags."
+  description = "Short ECR-safe deployment environment name used for resource names and tags."
   type        = string
   default     = "dev"
 
@@ -32,7 +32,7 @@ variable "environment" {
 }
 
 variable "container_image" {
-  description = "Future ECS container image reference. Use an immutable tag or digest in real environments."
+  description = "ECS container image reference for all task definitions. Use an immutable tag or digest, never latest."
   type        = string
   default     = "example.invalid/transaction-event-gateway:replace-me"
 
@@ -109,7 +109,7 @@ variable "migration_task_memory" {
 }
 
 variable "api_desired_count" {
-  description = "Desired number of API ECS service tasks. Keep small until runtime secrets, image publishing, and private egress are approved."
+  description = "Desired number of API ECS service tasks. Keep small until runtime secrets, image publishing, and private egress are in place."
   type        = number
   default     = 1
 
@@ -120,7 +120,7 @@ variable "api_desired_count" {
 }
 
 variable "worker_desired_count" {
-  description = "Desired number of worker ECS service tasks. Keep small until runtime secrets, image publishing, and private egress are approved."
+  description = "Desired number of worker ECS service tasks. Keep small until runtime secrets, image publishing, and private egress are in place."
   type        = number
   default     = 1
 
@@ -167,7 +167,7 @@ variable "app_environment_variables" {
 }
 
 variable "create_vpc" {
-  description = "Future switch for a managed VPC path. The current scaffold does not create VPC resources."
+  description = "Reserved switch for a managed VPC. No VPC resources are defined; the value only changes the networking_mode output."
   type        = bool
   default     = false
 }
@@ -185,7 +185,7 @@ variable "vpc_id" {
 }
 
 variable "public_subnet_ids" {
-  description = "Existing public subnet IDs intended for a future public ALB. This scaffold does not create subnets."
+  description = "Existing public subnet IDs for the ALB. This configuration does not create subnets."
   type        = list(string)
   default     = []
 
@@ -198,7 +198,7 @@ variable "public_subnet_ids" {
 }
 
 variable "private_subnet_ids" {
-  description = "Existing private subnet IDs intended for future ECS, RDS, Redis, and migration tasks. This scaffold does not create subnets."
+  description = "Existing private subnet IDs for the ECS tasks, RDS, Redis, and interface endpoints. This configuration does not create subnets."
   type        = list(string)
   default     = []
 
@@ -211,7 +211,7 @@ variable "private_subnet_ids" {
 }
 
 variable "private_route_table_ids" {
-  description = "Existing private route table IDs that should receive the S3 gateway endpoint route. Required before an approved apply when private egress endpoints are enabled."
+  description = "Existing private route table IDs that should receive the S3 gateway endpoint route. Required for an apply when private egress endpoints are enabled."
   type        = list(string)
   default     = []
 
@@ -230,7 +230,7 @@ variable "create_private_egress_endpoints" {
 }
 
 variable "allowed_http_cidrs" {
-  description = "IPv4 CIDR blocks allowed to reach the future public ALB over HTTP. MVP default is open internet for review only."
+  description = "IPv4 CIDR blocks allowed to reach the public ALB over HTTP. The default is the open internet; restrict it for any real deployment."
   type        = list(string)
   default     = ["0.0.0.0/0"]
 
@@ -243,7 +243,7 @@ variable "allowed_http_cidrs" {
 }
 
 variable "app_port" {
-  description = "Container port for the API service and future ALB target group."
+  description = "Container port for the API service and the ALB target group."
   type        = number
   default     = 3000
 
@@ -254,7 +254,7 @@ variable "app_port" {
 }
 
 variable "alb_port" {
-  description = "Public HTTP listener port for the future ALB. Defaults to 80 for the MVP ALB slice."
+  description = "Public HTTP listener port for the ALB."
   type        = number
   default     = 80
 
@@ -265,13 +265,13 @@ variable "alb_port" {
 }
 
 variable "alb_enable_deletion_protection" {
-  description = "Whether to enable deletion protection on the future ALB. Defaults to false for the no-apply MVP scaffold."
+  description = "Whether to enable deletion protection on the ALB. Defaults to false so a short-lived environment can be destroyed."
   type        = bool
   default     = false
 }
 
 variable "postgres_port" {
-  description = "PostgreSQL port for the future RDS instance."
+  description = "PostgreSQL port for the RDS instance."
   type        = number
   default     = 5432
 
@@ -365,13 +365,13 @@ variable "postgres_multi_az" {
 }
 
 variable "postgres_deletion_protection" {
-  description = "Whether to enable deletion protection on the PostgreSQL RDS instance. Defaults to false for the no-apply MVP scaffold."
+  description = "Whether to enable deletion protection on the PostgreSQL RDS instance. Defaults to false so a short-lived environment can be destroyed."
   type        = bool
   default     = false
 }
 
 variable "postgres_skip_final_snapshot" {
-  description = "Whether to skip the final snapshot when destroying PostgreSQL. Defaults to true for the no-apply MVP scaffold; production should usually set this to false."
+  description = "Whether to skip the final snapshot when destroying PostgreSQL. Defaults to true for short-lived environments; production should usually set this to false."
   type        = bool
   default     = true
 }
@@ -462,7 +462,7 @@ variable "redis_apply_immediately" {
 }
 
 variable "health_check_path" {
-  description = "Future ALB health check path for API serving readiness. Defaults to /health/serving (config and PostgreSQL only) so a Redis incident does not drain API tasks. Use /health/ready only for operator or deploy-gate checks, not for load balancer routing."
+  description = "ALB health check path for API serving readiness. Defaults to /health/serving (config and PostgreSQL only) so a Redis incident does not drain API tasks. Use /health/ready only for operator or deploy-gate checks, not for load balancer routing."
   type        = string
   default     = "/health/serving"
 
@@ -484,7 +484,7 @@ variable "health_check_grace_period_seconds" {
 }
 
 variable "tags" {
-  description = "Additional non-secret tags to merge into future AWS resources."
+  description = "Additional non-secret tags to merge into the default tags of all resources."
   type        = map(string)
   default     = {}
 }

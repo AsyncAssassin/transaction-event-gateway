@@ -1,29 +1,28 @@
 # Terraform S3 backend configuration template.
 #
-# Copy to backend.hcl only after explicit approval for remote state setup.
-# backend.hcl is intentionally ignored and must not be committed with real
-# environment values.
+# Copy to backend.hcl (ignored by git) and fill in real values before the first
+# remote-state init:
+#   terraform -chdir=infra/terraform init -backend-config=backend.hcl
 #
-# Local scaffold validation remains:
-# terraform -chdir=infra/terraform init -backend=false
+# Local scaffold validation does not use a backend:
+#   terraform -chdir=infra/terraform init -backend=false
 #
-# The committed .tf files contain only an empty backend "s3" {} block. This
-# file is not active unless an approved operator copies it to ignored
-# backend.hcl with approved values or supplies equivalent approved init config.
+# The committed .tf files contain only an empty backend "s3" {} block, so this
+# file has no effect until it is copied and passed to init.
 
-bucket = "REPLACE_WITH_APPROVED_TERRAFORM_STATE_BUCKET"
+bucket = "REPLACE_WITH_TERRAFORM_STATE_BUCKET"
 key    = "transaction-event-gateway/REPLACE_WITH_ENVIRONMENT/terraform.tfstate"
-region = "REPLACE_WITH_APPROVED_AWS_REGION"
+region = "REPLACE_WITH_AWS_REGION"
 
 encrypt = true
 
-# Select exactly one approved locking mechanism before first remote backend init.
+# Choose exactly one locking mechanism before the first remote backend init.
 #
 # DynamoDB locking:
-# dynamodb_table = "REPLACE_WITH_APPROVED_TERRAFORM_LOCK_TABLE"
+# dynamodb_table = "REPLACE_WITH_TERRAFORM_LOCK_TABLE"
 #
-# S3-native lockfile locking, if supported by the approved Terraform version:
+# S3-native lockfile locking (Terraform 1.10 and later):
 # use_lockfile = true
 #
-# Optional: uncomment only if the approved state bucket policy requires SSE-KMS.
-# kms_key_id = "REPLACE_WITH_APPROVED_KMS_KEY_ID_OR_ALIAS"
+# Optional: uncomment only if the state bucket policy requires SSE-KMS.
+# kms_key_id = "REPLACE_WITH_KMS_KEY_ID_OR_ALIAS"

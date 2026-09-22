@@ -2,7 +2,7 @@
 
 ## Overview
 
-Failure handling follows the architecture principle that PostgreSQL is authoritative and Redis is disposable infrastructure. Durable state, database constraints, transactions, and worker idempotency provide correctness under retries and partial failures.
+PostgreSQL is authoritative; Redis holds only BullMQ queue state. Durable state, database constraints, transactions, and worker idempotency provide correctness under retries and partial failures. Behavior that is not covered yet is listed under [Known Limitations](#known-limitations).
 
 ## Duplicate Payment Intent Request
 
@@ -37,15 +37,14 @@ Protection:
 
 ## Invalid Webhook Signature
 
-Scenario: `POST /webhooks/blockchain` includes a missing or incorrect HMAC signature.
+Scenario: `POST /webhooks/blockchain` has a missing, malformed, or incorrect HMAC signature.
 
 Expected behavior:
 
-- Return `401 Unauthorized`.
-- Do not persist the payload.
-- Do not create an outbox event.
-- Do not enqueue a BullMQ job.
-- Log provider, event ID if safely parsed, signature version, and rejection reason. Do not log full signatures or secrets.
+- A missing `X-Webhook-Signature` header or one that does not use the `v1=<hex>` format returns `400 Bad Request` with `VALIDATION_ERROR`.
+- A well-formed signature that does not match returns `401 Unauthorized` with `INVALID_WEBHOOK_SIGNATURE`.
+- Do not persist the payload, create an outbox event, or enqueue a BullMQ job.
+- Log `webhook_rejected` with the provider, the event ID when the body parsed, and the error code. Signatures, secrets, and bodies are never logged.
 
 Protection:
 
@@ -94,7 +93,7 @@ Expected behavior:
 - Return `409 Conflict`.
 - Use error code `WEBHOOK_NONCE_REPLAY`.
 - Do not process the new payload.
-- Log a structured security anomaly with provider, nonce hash, and event identifiers where safe.
+- Log `webhook_rejected` with the provider, event ID, and `WEBHOOK_NONCE_REPLAY`. The nonce itself is not logged.
 
 Protection:
 
@@ -154,14 +153,16 @@ Protection:
 
 ## PostgreSQL Unavailable
 
-Scenario: PostgreSQL is unavailable or cannot complete required transactions.
+Scenario: PostgreSQL refuses or drops connections, or a new connection cannot be opened within 5 seconds.
 
 Expected behavior:
 
-- API operations requiring durable state return `503 Service Unavailable`.
-- The service must not fall back to Redis or memory for idempotency or business state.
+- API operations requiring durable state return `503 Service Unavailable` with `SERVICE_UNAVAILABLE`.
+- The service does not fall back to Redis or memory for idempotency or business state.
 - Webhook payloads are not accepted unless they can be durably persisted.
-- Readiness should report unavailable.
+- `/health/ready` and `/health/serving` return `503`.
+
+A PostgreSQL that keeps connections open but stops answering behaves differently; see [Known Limitations](#known-limitations).
 
 Protection:
 
@@ -174,9 +175,8 @@ Scenario: Worker crashes while processing a BullMQ job.
 
 Expected behavior:
 
-- If crash happens before transaction commit, PostgreSQL rolls back changes and BullMQ retries.
-- If crash happens after commit but before job acknowledgement, the next attempt exits successfully after seeing the event already processed.
-- Processing attempts should show the failure or repeated execution where possible.
+- If the crash happens before the transaction commits, PostgreSQL rolls back all changes, including the processing attempt row, and BullMQ retries the job once its lock expires.
+- If the crash happens after commit but before the job is acknowledged, the next attempt sees the event already `PROCESSED`, records a `SUCCEEDED` attempt, and completes.
 
 Protection:
 
@@ -192,8 +192,8 @@ Expected behavior:
 
 - Webhook acceptance may still persist the event and outbox row after signature validation.
 - Worker marks the event `FAILED` with reason `UNKNOWN_PAYMENT_INTENT`.
-- No payment intent is created from the webhook in the MVP.
-- Future reconciliation may handle delayed or unknown events, but it is outside MVP.
+- No payment intent is created from the webhook.
+- The event is not retried later, so a webhook that arrives before its payment intent stays `FAILED`.
 
 Protection:
 
@@ -209,7 +209,7 @@ Expected behavior for same event ID with different payload:
 - Return `409 Conflict`.
 - Use error code `WEBHOOK_EVENT_CONFLICT`.
 - Do not process the new payload.
-- Log provider, event ID, existing payload hash, and new payload hash.
+- Log `webhook_rejected` with the provider, event ID, and `WEBHOOK_EVENT_CONFLICT`. Payload hashes are stored in `webhook_events.payload_hash`, not logged.
 
 Expected behavior for domain mismatch during worker processing:
 
@@ -221,3 +221,21 @@ Protection:
 
 - Unique `(provider, external_event_id)` plus `payload_hash`.
 - Worker validation for amount, asset, transaction hash, and state transition rules. `reference` is not part of the signed webhook DTO, so an unknown `reference` field is rejected before worker processing.
+
+## Known Limitations
+
+### Accepted Webhook Stuck in `QUEUED`
+
+After the dispatcher publishes a job, the outbox row is `PUBLISHED` and the BullMQ job is the only record of pending work. If Redis loses the job (a flush, a failover without persistence, eviction under a policy other than `noeviction`) or the job fails all five attempts (for example when PostgreSQL is unavailable for more than about 75 seconds while it is processed), the webhook event stays `QUEUED` and the payment intent stays `CREATED`. A repeated delivery from the provider is answered with `ALREADY_ACCEPTED` and does not change that. Re-drive such events with SQL; see [Re-drive a stuck webhook event](runbook.md#re-drive-a-stuck-webhook-event).
+
+### PostgreSQL That Stops Answering
+
+The main connection pool (10 connections, 5 second connect timeout) sets no query timeout and no TCP keepalive; a global `statement_timeout` is left out on purpose because it would abort worker transactions that wait on row locks. If established connections stop receiving answers, for example when the network path silently drops them, queries on them never complete. Once all pool connections are stuck, durable API requests wait 5 seconds for a free connection and return `503`, and the worker's dispatcher and job processing stall without logging. The health endpoints use a separate one-connection pool that opens fresh connections with 1 second connect and 2 second statement timeouts, so they can keep returning `200` meanwhile. Restarting the process recovers.
+
+### Redis That Stops Answering
+
+The connection that publishes jobs has no command timeout. A Redis that accepts connections but stops answering blocks the dispatcher's publish call while its transaction holds row locks on the selected outbox rows, and nothing is logged until the connection fails.
+
+### No Worker Health Signal
+
+The worker process has no health endpoint or heartbeat. ECS and Docker Compose restart it only when the process exits, so a stalled worker stays in service; watch for missing `outbox_dispatch_published` and `worker_job_processed` events while webhooks are being accepted.

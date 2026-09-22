@@ -3,8 +3,8 @@ project_name    = "transaction-event-gateway"
 environment     = "dev"
 container_image = "example.invalid/transaction-event-gateway:replace-me"
 
-# Fake placeholder values for local review only. Replace them per environment
-# before any approved plan or apply.
+# Fake placeholder values for local validation only. Replace them per
+# environment before any plan or apply.
 create_vpc = false
 vpc_id     = "vpc-aaaaaaaaaaaaaaaaa"
 

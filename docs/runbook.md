@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This runbook covers local and staging-style operation for `transaction-event-gateway`: health checks, state inspection, outbox and worker diagnosis, safe local resets, and log correlation. PostgreSQL is the source of truth; Redis/BullMQ is queue infrastructure. Future deployed AWS smoke testing is documented separately in [AWS deployed smoke test flow](aws-smoke-test-flow.md) and remains approval-gated.
+This runbook covers local operation of `transaction-event-gateway`: health checks, state inspection, outbox and worker diagnosis, safe local resets, and log correlation. PostgreSQL is the source of truth; Redis/BullMQ is queue infrastructure. Deployed checks are part of the [AWS deployment runbook](aws-deployment-runbook.md).
 
 ## Service Topology
 
@@ -31,9 +31,8 @@ Healthy results:
 - `docker compose ps` shows PostgreSQL and Redis running and healthy.
 - `npm run smoke:local` passes after PostgreSQL, Redis, the API process, and the worker process are running with matching local environment.
 
-Do not use the local smoke command as a deployed AWS smoke test unless a future
-approved phase explicitly allows that target and its data, credential, and
-evidence boundaries.
+The smoke script reads PostgreSQL and Redis through the local Compose
+containers, so it only checks the local stack.
 
 ## Rate Limiting
 
@@ -75,7 +74,7 @@ docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SEL
 Stuck outbox rows:
 
 ```bash
-docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT id, aggregate_id, status, attempts, next_attempt_at, last_error, created_at FROM outbox_events WHERE (status = 'PENDING' AND created_at < now() - interval '2 minutes') OR (status = 'FAILED' AND (next_attempt_at IS NULL OR next_attempt_at <= now())) ORDER BY created_at ASC LIMIT 50;"
+docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT id, aggregate_id, status, attempts, next_attempt_at, last_error, created_at FROM outbox_events WHERE dead_at IS NULL AND ((status = 'PENDING' AND created_at < now() - interval '2 minutes') OR (status = 'FAILED' AND (next_attempt_at IS NULL OR next_attempt_at <= now()))) ORDER BY created_at ASC LIMIT 50;"
 ```
 
 Failed webhook events:
@@ -140,14 +139,32 @@ DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway REDIS_U
 
 Worker jobs contain only `webhookEventId`, so the worker reloads durable state from PostgreSQL. Duplicate jobs should be safe because processing locks the webhook row and exits successfully if the event is already `PROCESSED`.
 
-If `webhook_events.status` stays `QUEUED` or `PROCESSING`:
+### Webhook event stays `QUEUED`
+
+`PROCESSING` is only set inside the worker transaction, which always ends in `PROCESSED` or `FAILED` or rolls back, so a webhook event that does not finish stays `QUEUED`. If it stays `QUEUED`:
 
 - Check that Redis is reachable and the worker process is consuming jobs.
-- Inspect `webhook_processing_attempts` for recent entries tied to the webhook event.
-- Inspect worker logs by `webhookEventId` and `jobId`.
-- Check whether the process stopped while an event was in flight; BullMQ should retry and PostgreSQL transaction rollback should prevent partial state.
+- Inspect worker logs by `webhookEventId`. Each failed attempt logs `worker_job_failed`; after the fifth, BullMQ gives up. A crashed attempt is retried once its job lock expires.
+- A rolled-back attempt leaves no `webhook_processing_attempts` row, so missing attempt rows do not mean the job never ran.
+- If the job is gone from Redis or has failed all attempts, re-drive the event as described below.
 
-If `webhook_events.status` becomes `FAILED`:
+### Re-drive a stuck webhook event
+
+List webhook events whose outbox row was published more than 10 minutes ago but which never finished:
+
+```bash
+docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT w.id, w.external_event_id, w.status, o.published_at FROM webhook_events w JOIN outbox_events o ON o.aggregate_type = 'webhook_event' AND o.aggregate_id = w.id WHERE w.status IN ('RECEIVED', 'QUEUED') AND o.status = 'PUBLISHED' AND o.published_at < now() - interval '10 minutes' ORDER BY o.published_at;"
+```
+
+Hand them back to the dispatcher, which republishes them within a second. Add `AND w.id = '<webhook_event_id>'` to re-drive a single event. A duplicate job is harmless: the worker locks the webhook row and skips events that are already `PROCESSED`.
+
+```bash
+docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "UPDATE outbox_events o SET status = 'FAILED', next_attempt_at = now(), last_error = 'MANUAL_REDRIVE', updated_at = now() FROM webhook_events w WHERE o.aggregate_type = 'webhook_event' AND o.aggregate_id = w.id AND o.status = 'PUBLISHED' AND w.status IN ('RECEIVED', 'QUEUED') AND o.published_at < now() - interval '10 minutes';"
+```
+
+### Webhook event is `FAILED`
+
+`FAILED` is a durable domain decision, not a transient error, and is not retried:
 
 - Read `webhook_events.failure_reason`.
 - Read the latest `webhook_processing_attempts.error_message`.
@@ -178,6 +195,7 @@ If `webhook_events.status` becomes `FAILED`:
 - `/health/ready` and `/health/serving` should return unavailable because PostgreSQL readiness fails.
 - Health endpoints use an isolated bounded PostgreSQL health pool, not the main TypeORM pool used by durable API and worker operations.
 - Migrations and schema checks require PostgreSQL.
+- A PostgreSQL that keeps connections open but stops answering is not detected quickly; see [known limitations](failure-modes.md#known-limitations).
 
 ## Safe Local Reset Commands
 
@@ -195,7 +213,7 @@ Prefer smoke IDs for targeted inspection instead of queue deletion:
 docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT id, status, reference, confirmed_tx_hash FROM payment_intents WHERE reference LIKE 'order_smoke_%' ORDER BY created_at DESC LIMIT 20;"
 ```
 
-For a full local infrastructure restart:
+For a full local infrastructure reset, which also discards the local database and queue data:
 
 ```bash
 docker compose down
@@ -209,14 +227,14 @@ If local Redis queue state is suspected, prefer restarting the local Redis conta
 
 - Send `X-Correlation-ID` on API calls to connect request logs, service logs, and error responses.
 - If the header is missing or invalid, the service generates a correlation ID and returns it in the response header.
-- Structured logs include safe fields such as `correlationId`, `requestId`, `paymentIntentId`, `webhookEventId`, `externalEventId`, `provider`, `jobId`, `status`, `errorCode`, `method`, `path`, and `durationMs`.
-- Never log webhook secrets, full signatures, raw request bodies, or sensitive payload fields.
-- Use the correlation ID to follow a request from `http_request_completed` through payment, webhook, outbox, or worker log events.
+- Each application event is logged as a single-line JSON object inside the Nest console log line. Only allow-listed fields are written: `correlationId`, `requestId`, `paymentIntentId`, `webhookEventId`, `externalEventId`, `provider`, `jobId`, `status`, `errorCode`, `method`, `path`, `durationMs`, and `suppressedCount`.
+- Webhook secrets, signatures, raw request bodies, and payload fields are never logged.
+- The correlation ID covers one HTTP request: `http_request_completed`, `http_request_failed`, and the payment intent and webhook events logged while serving it. It is not carried into the outbox or BullMQ jobs; dispatcher and worker events carry `webhookEventId` and `jobId` instead. To connect them to a webhook request, look up the `webhook_events` row by `external_event_id` (the `externalEventId` in `webhook_accepted`).
 
 ## Operational Gaps
 
-- Authenticated manual retry endpoint.
+- Manual retry endpoint (re-drives use SQL).
 - Metrics dashboards.
 - Alerting.
 - Dead-letter inspection.
-- Automated deployment runbook.
+- Deployment automation.

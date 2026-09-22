@@ -20,7 +20,7 @@ Recommended for all requests:
 X-Correlation-ID: request-123
 ```
 
-The service should accept an inbound `X-Correlation-ID` or generate one when missing. Responses should include the effective correlation ID.
+The service accepts an inbound `X-Correlation-ID` of up to 255 visible ASCII characters (no spaces) and generates a UUID when the header is missing or invalid. Every response, including errors, returns the effective value in `X-Correlation-ID`; error bodies also carry it as `correlationId`.
 
 ## Error Response Shape
 
@@ -40,7 +40,7 @@ Use a stable error envelope:
 }
 ```
 
-`details` is optional and should not include secrets, full webhook signatures, or sensitive raw payloads.
+`details` is optional and lists field paths with constraint messages; it does not include secrets, webhook signatures, or raw payloads.
 
 ## POST /payment-intents
 
@@ -118,14 +118,15 @@ Content-Type: application/json
 - `destination` is required and limited to 255 characters.
 - `reference` is optional and limited to 255 characters.
 - `clientRequestId` is optional and limited to 255 characters.
-- `metadata` is optional from the caller perspective and defaults to `{}` when omitted.
-- Unsupported assets, invalid amount semantics, or invalid destination semantics return `400 Bad Request` with `VALIDATION_ERROR` and field-level `details`.
+- `metadata` is optional, must be a JSON object, and defaults to `{}` when omitted.
+- Unknown properties are rejected.
+- Invalid values return `400 Bad Request` with `VALIDATION_ERROR` and field-level `details`.
 
 ### Error Responses
 
 | Status | Error code | Case |
 | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Missing `Idempotency-Key`, invalid JSON, DTO validation failure, unsupported asset, invalid amount, or invalid destination |
+| 400 | `VALIDATION_ERROR` | Missing or oversized `Idempotency-Key`, invalid JSON, or DTO validation failure (including unknown properties) |
 | 409 | `IDEMPOTENCY_CONFLICT` | Same idempotency key was already used with a different logical request payload |
 | 413 | `PAYLOAD_TOO_LARGE` | Request body exceeds the configured size limit |
 | 503 | `SERVICE_UNAVAILABLE` | PostgreSQL is unavailable |
@@ -184,11 +185,11 @@ header = X-Webhook-Signature: v1=<hex_signature>
 
 Validation order:
 
-1. Require timestamp, nonce, and signature headers.
-2. Validate timestamp format.
-3. Reject timestamps outside the configured 5 minute tolerance window.
-4. Compute the expected HMAC using the raw request body.
-5. Compare signatures with timing-safe equality.
+1. Require `Content-Type: application/json`.
+2. Require the timestamp, nonce (at most 255 characters), and signature headers.
+3. Validate the timestamp format and reject timestamps outside the tolerance window (`WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS`, default 300).
+4. Validate the `v1=<hex>` signature format.
+5. Compute the expected HMAC over the raw request body and compare with timing-safe equality.
 6. Validate the JSON payload DTO.
 7. Persist the webhook inbox row and outbox row in one PostgreSQL transaction.
 
@@ -270,64 +271,12 @@ Rules:
 - The API inserts an `outbox_events` row in the same transaction as the webhook inbox row.
 - The API does not publish directly to BullMQ during webhook acceptance.
 
-## POST /webhook-events/{id}/retry
+## Manual Retry
 
-Optional / MVP-later endpoint for manually retrying failed webhook processing. The MVP can defer this endpoint until the core worker and outbox flow exist.
+There is no retry endpoint. Operators re-drive a webhook event that is stuck in `QUEUED` with SQL; see [Re-drive a stuck webhook event](runbook.md#re-drive-a-stuck-webhook-event).
 
-### Required Headers
+## OpenAPI
 
-```http
-Content-Type: application/json
-```
+Swagger UI is served at `/docs` and the OpenAPI JSON document at `/docs/openapi.json`. Both are enabled outside production; in production they are served only when `SWAGGER_ENABLED=true`.
 
-Authentication and authorization are outside the MVP scope. When this endpoint is implemented beyond MVP, it must require operator authorization.
-
-### Request
-
-```json
-{
-  "reason": "manual operational retry after transient dependency failure"
-}
-```
-
-### Success Response
-
-`202 Accepted`
-
-```json
-{
-  "webhookEventId": "9d55ebac-758c-4a9c-8237-25ad37e78c64",
-  "status": "QUEUED"
-}
-```
-
-### Rules
-
-- Only `FAILED` webhook events can be manually retried.
-- Manual retry must not modify the original webhook payload.
-- Retry should create a new outbox event or BullMQ job for the existing durable webhook event.
-- Retry reason should be recorded when the endpoint exists.
-
-### Error Responses
-
-| Status | Error code | Case |
-| --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Invalid UUID or invalid request body |
-| 404 | `WEBHOOK_EVENT_NOT_FOUND` | No webhook event exists for the supplied ID |
-| 409 | `WEBHOOK_EVENT_NOT_RETRYABLE` | Event is not in `FAILED` status |
-| 503 | `SERVICE_UNAVAILABLE` | PostgreSQL or required queue infrastructure is unavailable |
-
-## OpenAPI / Swagger Expectations
-
-The NestJS implementation should expose Swagger/OpenAPI documentation for MVP endpoints.
-
-Required documentation:
-
-- Path, method, summary, and operation ID for every endpoint.
-- Header parameters for `Idempotency-Key`, `X-Correlation-ID`, and webhook signature headers.
-- Request DTO schemas with examples.
-- Response schemas for success, replay, conflict, validation, unauthorized, stale timestamp, and service unavailable cases.
-- Enum schemas for payment intent and webhook statuses.
-- `Idempotent-Replayed` response header on replayed `POST /payment-intents` calls.
-- Security notes explaining that webhook signatures are computed over the raw body and are not derived from parsed JSON.
-- Clear marking of `POST /webhook-events/{id}/retry` as optional / MVP-later if it is not included in the initial route set.
+The generated document lists every operation with its operation ID, summary, required headers (`Idempotency-Key` and the three webhook signature headers), the `CreatePaymentIntentDto` request schema, and status descriptions. It does not yet define response schemas or the webhook request body, because the webhook handler reads the raw body for signature verification; this file is the reference for both.
