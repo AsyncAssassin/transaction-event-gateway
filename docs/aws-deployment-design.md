@@ -1,321 +1,197 @@
 # AWS Deployment Design
 
-## Metadata
+This document describes the target AWS shape for `transaction-event-gateway` and the decisions behind the Terraform scaffold in `infra/terraform`. The scaffold has never been applied: no image has been pushed to ECR, no remote state exists, and no AWS resource has been created from it.
 
-| Field | Value |
-| --- | --- |
-| Status | Design with incremental Terraform scaffold |
-| Scope | MVP AWS deployment architecture |
-| Last updated | 2026-06-22 |
+- [AWS deployment runbook](aws-deployment-runbook.md): first deployment, migration, smoke checks, monitoring window, and teardown.
+- [Terraform scaffold notes](../infra/terraform/README.md): resources, variables, secret formats, and local validation.
+- [Known gaps before the first apply](#known-gaps-before-the-first-apply): what must be fixed or consciously accepted before anything is created.
 
-## Scope
-
-This document describes a recommended MVP AWS deployment shape for `transaction-event-gateway`. It is a handoff document for incremental infrastructure phases.
-
-The current Terraform scaffold implements ECR, security groups, the MVP HTTP ALB path, private RDS PostgreSQL, private ElastiCache Redis, Secrets Manager placeholders for runtime values, ECS Fargate task definitions, an ECS cluster, API and worker ECS services, task log groups, a minimal ECS task execution role, and a configurable private VPC endpoint egress path. It enables Terraform backend support with an empty S3 backend block, documents the Terraform backend/state decision, the ECR image publishing path, the one-off ECS migration task flow, and the deployed smoke test flow, but does not initialize a remote backend. It does not publish an image, configure registry authentication, run migrations, define autoscaling, populate secret values, add deployment workflows, create NAT gateways, run deployed smoke tests, or provide live deployment behavior.
-
-Before any live AWS usage, review
-[AWS deploy guardrails](aws-deploy-guardrails.md) for cost guardrails,
-first-deploy prerequisites, and teardown ownership. Use
-[AWS short-lived deploy runbook](aws-short-lived-deploy-runbook.md) to connect
-the guardrails, backend/state owner, private egress inputs, secret population,
-image approval, migration gate, rollout gate, smoke gate, monitoring window,
-and teardown decision into one future go/no-go order.
-
-## Recommended MVP Architecture
+## Target Architecture
 
 ```text
 Internet
   -> Application Load Balancer, public subnets
   -> ECS Fargate API service, private subnets
-  -> RDS PostgreSQL, private subnets
-  -> ElastiCache Redis, private subnets
+       -> RDS PostgreSQL, private subnets
+       -> ElastiCache Redis, private subnets
 
 ECS Fargate worker service, private subnets
   -> RDS PostgreSQL
   -> ElastiCache Redis
 
-CI/CD
-  -> build and verify Docker image locally
-  -> approve immutable image publication
-  -> publish image to ECR
-  -> run one-off migration task
-  -> roll ECS API and worker services
+Release
+  -> build the image from a commit, push it to ECR with an immutable tag
+  -> run the one-off migration task
+  -> roll the API and worker services
 ```
 
-Core AWS services:
-
-- **ECR** stores versioned application images produced from the existing Dockerfile after an explicit publishing approval.
-- **ECS Fargate API service** runs the NestJS HTTP process from the shared image.
-- **ECS Fargate worker service** runs the BullMQ worker process from the same image with a worker command override.
-- **RDS PostgreSQL** stores payment intents, idempotency records, webhook inbox rows, outbox rows, and processing attempts.
-- **ElastiCache Redis** backs BullMQ queue infrastructure only.
-- **Application Load Balancer** exposes the API service over HTTPS.
-- **Secrets Manager or SSM Parameter Store** stores runtime secrets and environment configuration.
-- **CloudWatch Logs** receives API, worker, migration, and ECS task logs.
+- **ECR** stores images built from the repository `Dockerfile`.
+- **ECS Fargate API service** runs the NestJS HTTP process.
+- **ECS Fargate worker service** runs the outbox dispatcher and the BullMQ consumer from the same image.
+- **One-off ECS migration task** applies the TypeORM migrations from the same image.
+- **RDS PostgreSQL** stores payment intents, idempotency records, webhook inbox rows, outbox rows, and processing attempts; it is the source of truth.
+- **ElastiCache Redis** backs BullMQ only.
+- **Application Load Balancer** exposes the API. The scaffold defines an HTTP listener only; real client traffic needs an HTTPS listener with an ACM certificate.
+- **Secrets Manager** holds `DATABASE_URL`, `REDIS_URL`, and `WEBHOOK_SECRET`; ECS injects them when a task starts.
+- **CloudWatch Logs** receives API, worker, and migration task output.
+- **VPC endpoints** let the private tasks reach ECR, CloudWatch Logs, Secrets Manager, and S3 without a NAT gateway.
 
 ## Architecture Decisions
 
 ### ECS Fargate Instead of EKS
 
-ECS Fargate is the recommended MVP target because the service has two simple runtime units, one container image, and no Kubernetes-specific scheduling needs. It reduces operational surface area while still giving isolated services, rolling deployments, IAM task roles, CloudWatch integration, and private networking.
-
-EKS is not needed for the MVP. It can be revisited only if later phases require Kubernetes-native platform features, shared cluster workloads, or advanced scheduling patterns.
+The service has two long-running runtime units, one image, and no Kubernetes-specific scheduling needs. ECS Fargate provides isolated services, rolling deployments, IAM roles for tasks, CloudWatch integration, and private networking with a smaller operational surface than EKS. EKS is worth revisiting only for Kubernetes-native platform features or shared cluster workloads.
 
 ### Managed RDS and ElastiCache
 
-RDS and ElastiCache keep the MVP focused on the service and its reliability patterns instead of database and Redis host operations. PostgreSQL remains the source of truth. Redis remains disposable queue infrastructure; losing Redis availability pauses dispatch and processing, but accepted webhook work remains durable in PostgreSQL outbox rows.
-
-Use PostgreSQL 16 and Redis 7 where practical to match the local and CI runtime assumptions.
+Managed services keep the effort on the application and its reliability patterns instead of database and Redis host operations. PostgreSQL remains the source of truth. Redis holds only queue state: an outage pauses dispatch and processing, accepted webhooks stay durable in PostgreSQL, and jobs lost with Redis data are re-queued by the worker's reconciliation. The scaffold uses PostgreSQL 16 and Redis 7 to match the local and CI runtimes.
 
 ### Separate API and Worker Services
 
-The API and worker should be separate ECS services even though they use the same image:
+The API and worker run as separate ECS services from one image:
 
-- The API service needs ALB routing, HTTP health checks, and request-driven scaling.
-- The worker service needs no inbound traffic and is scaled by background workload, queue depth, and processing latency.
-- Deploying separately lets the release process roll API and worker tasks independently while keeping the same image version.
-- Operational failures are easier to isolate: API readiness, outbox dispatch, and worker processing can be investigated separately.
+- The API needs ALB routing, HTTP health checks, and request-driven scaling.
+- The worker needs no inbound traffic and scales with queue depth and processing latency.
+- Failures stay separable: API readiness, outbox dispatch, and worker processing can be investigated and scaled independently.
+
+Both services currently take their image from one Terraform variable, so they roll out together (see the known gaps).
 
 ### Terraform State Backend
 
-The current decision enables backend support without activating real remote state: an empty `backend "s3" {}` block is committed, but no remote backend has been initialized. Local validation should continue to use `terraform init -backend=false` so review does not create local or remote Terraform state. This phase did not create a state bucket, lock table, or any other live backend resource, and no live Terraform command was run.
+`versions.tf` declares an empty `backend "s3" {}` block. Backend settings come from an untracked `infra/terraform/backend.hcl` based on the committed `backend.hcl.example`: an S3 bucket with encryption, one state key per environment, and one locking mechanism, either a DynamoDB table or S3-native lockfile locking. The bucket and any lock table are created outside this configuration, so the state never manages its own storage. Local and CI validation run `terraform init -backend=false`, which needs no AWS credentials and creates no state. Bucket names, account IDs, ARNs, and state files are never committed.
 
-Before any first apply, the deployment owner must approve the Terraform state owner and backend configuration. The future remote backend should use an S3 state bucket with encryption and an approved locking mechanism, either DynamoDB locking or S3-native lockfile locking when supported by the approved Terraform version. Backend values must come from an untracked `infra/terraform/backend.hcl` file based on the committed template or from an explicitly approved command; real bucket names, lock table names, account IDs, ARNs, credentials, and state files must not be committed.
+### Image Publishing
 
-### ECR Image Publishing
+- Build from a specific commit with the repository `Dockerfile`, for `linux/amd64`, because the task definitions run on X86_64.
+- Tag the image `git-<full-commit-sha>`. The ECR repository has immutable tags, scan on push, AES256 encryption, and a lifecycle policy that keeps the 30 most recent images.
+- Pass the image to Terraform as `container_image`, preferably by digest (`<repository-url>@sha256:<hex>`); the immutable tag form (`<repository-url>:git-<full-commit-sha>`) also works. `latest`, branch names, and other moving tags are not valid inputs.
+- The same `container_image` feeds the API, worker, and migration task definitions.
+- CI builds the image locally as `transaction-event-gateway:ci` to check the `Dockerfile`; nothing pushes images or deploys automatically.
 
-The ECR image publishing path is documented in
-[ECR image publishing path](ecr-image-publishing.md). The path is
-approval-gated and has not been executed in this phase.
-
-Image selection starts with a reviewed commit SHA. The Docker image should be
-built from that exact source revision using the existing `Dockerfile`, verified
-with the current checks, and tagged with an immutable tag such as
-`git-<full-commit-sha>`. After publication, a registry digest is preferred for
-production-like Terraform inputs. Mutable tags such as `latest`, branch names,
-or moving release labels are not acceptable deployment inputs.
-
-Publication approval must happen after typecheck, lint, tests, build, Docker
-image build, audit, schema, forbidden wording, and credentials/account-safety
-checks pass, and before registry authentication or image publication. The
-approver should be the deployment owner for the target environment.
-
-Terraform receives the approved image through `container_image`, using either
-the immutable tag form or the digest form. The same image reference is consumed
-by API, worker, and migration task definitions. Real ECR repository URLs,
-account IDs, credentials, ARNs, tokens, and secrets must not be added to
-committed docs, examples, or Terraform variable files without separate
-approval.
+The commands are in [Build and push the image](aws-deployment-runbook.md#build-and-push-the-image).
 
 ## Runtime Units
 
 ### API Service
 
-- ECS service: Terraform names this as `{project_name}-{environment}-api`.
-- Image: approved image digest or immutable tag from ECR.
-- Command: default image command, currently the API process.
-- Desired count: start with at least 2 tasks for production-like availability; staging may use 1.
-- Inbound: ALB target group only.
-- Health check: ALB target group should use `GET /health/serving` (config and PostgreSQL only) so a Redis incident does not drain API tasks that can still serve payment intent creation and webhook acceptance. `GET /health/ready` (config, PostgreSQL, Redis) remains for operators and deploy gates.
-- Public endpoints: REST API, Swagger, and health endpoints through the ALB.
-- Rate limiting: the current API limiter is process-local, in-memory, and keyed by the request source observed by Nest/Express. Do not treat ALB/proxy traffic as accurately limited per end-client until trust proxy / `X-Forwarded-For` handling and a distributed/shared limiter are explicitly designed and implemented.
+- ECS service and task definition family `<project_name>-<environment>-api`, container `api`, command `node dist/main.js`, port `app_port` (default `3000`).
+- `api_desired_count` defaults to `1`. Production-like availability needs at least two tasks in different Availability Zones.
+- Inbound traffic comes only from the ALB security group.
+- The ALB target group checks `GET /health/serving` (configuration and PostgreSQL), so a Redis incident does not drain API tasks that can still create payment intents and accept webhooks. `GET /health/ready` (configuration, PostgreSQL, and Redis) is the check for operators and deployments.
+- Rate limiting is process-local, in memory, and keyed by the request source that Nest/Express observes. Behind the ALB that source is not the end client, and limiter state is not shared between tasks. Real multi-client traffic needs proxy-aware forwarded-IP handling and a shared limiter, or an explicit decision to accept this limitation.
 
 ### Worker Service
 
-- ECS service: Terraform names this as `{project_name}-{environment}-worker`.
-- Image: same image digest or immutable tag as the API release.
-- Command override: run the worker entrypoint, for example `node dist/worker.js`.
-- Desired count: start with 1 for MVP; increase only after queue depth, lock behavior, and processing latency are observed.
-- Inbound: none.
-- Outbound: PostgreSQL, Redis, CloudWatch Logs, and AWS APIs needed for secrets.
-- Dispatcher: enabled with `OUTBOX_DISPATCH_ENABLED=true` unless a controlled maintenance window requires pausing publication.
+- ECS service and task definition family `<project_name>-<environment>-worker`, container `worker`, command `node dist/worker.js`; no load balancer and no inbound traffic.
+- `worker_desired_count` defaults to `1`. Increase it only after queue depth, row-lock contention, and processing latency have been observed.
+- Outbound traffic goes to PostgreSQL, Redis, CloudWatch Logs, and Secrets Manager.
+- `OUTBOX_DISPATCH_ENABLED=true` runs the outbox dispatcher; `false` pauses publication deliberately.
+- Every 60 seconds the dispatcher runner moves at most 100 outbox rows that were `PUBLISHED` more than 10 minutes ago, and whose webhook event is still `RECEIVED` or `QUEUED`, back to `FAILED` with `next_attempt_at = now()`; the regular dispatcher then republishes their jobs. This covers jobs lost with Redis data and jobs whose retries were exhausted. Duplicate jobs are harmless because processing is idempotent.
 
 ### Migration Task
 
-- ECS one-off task: uses the same image version as the release.
-- Command override: run database migrations before rolling API and worker services with `npm run migration:run:prod`.
-- Secrets: receives `DATABASE_URL` only.
-- Network: private subnets with access to RDS, Secrets Manager, CloudWatch Logs, and the approved private egress path.
-- Execution: must finish successfully before service rollout proceeds.
-- Safety: production migrations require review for lock behavior, runtime duration, rollback limits, and destructive/revert risk.
-- Run flow: see [One-off ECS migration task flow](aws-migration-task-flow.md). The flow is documented only; no live run is approved by this document.
+- Task definition family `<project_name>-<environment>-migration`, container `migration`, command `npm run migration:run:prod`. It is not a service: `aws ecs run-task` starts it in the private subnets with the ECS task security group.
+- It receives the shared non-secret environment and only `DATABASE_URL` from Secrets Manager.
+- It must exit with code `0` before new code that expects the new schema starts. The scaffold does not enforce this order (see the known gaps).
+- Check destructive, long-running, or data-rewriting migrations for lock behavior, duration, and rollback limits before running them against a shared database.
 
 ## Secrets and Environment
 
-Use Secrets Manager or SSM Parameter Store. Secrets Manager is preferred for high-sensitivity values and rotation workflows; SSM Parameter Store is acceptable for simpler MVP configuration if access is tightly scoped.
+All three task definitions receive the same non-secret environment from `ecs-tasks.tf`; entries in `app_environment_variables` override it:
 
-Required or expected runtime values:
+| Variable | Value in the task definitions |
+| --- | --- |
+| `NODE_ENV` | `production` |
+| `PORT` | `app_port` (default `3000`) |
+| `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS` | `300` |
+| `OUTBOX_DISPATCH_ENABLED` | `true` |
+| `OUTBOX_DISPATCH_INTERVAL_MS` | `1000` |
+| `OUTBOX_MAX_ATTEMPTS` | `10`; reserved, transient publish failures retry indefinitely |
+| `RATE_LIMIT_ENABLED`, `RATE_LIMIT_TTL_SECONDS`, `RATE_LIMIT_LIMIT` | `true`, `60`, `100` |
+| `SWAGGER_ENABLED` | `false` |
 
-| Variable | Storage | Applies to | Notes |
-| --- | --- | --- | --- |
-| `NODE_ENV` | Parameter | API, worker, migration task | Use `production` for deployed environments. |
-| `PORT` | Parameter | API | Container listen port, default-compatible value is `3000`. |
-| `DATABASE_URL` | Secret | API, worker, migration task | RDS PostgreSQL connection string with a percent-encoded password and TLS parameters; see the `DATABASE_URL` format in [Terraform scaffold notes](../infra/terraform/README.md). Do not expose publicly. |
-| `REDIS_URL` | Secret or parameter | API, worker | ElastiCache Redis connection string. |
-| `WEBHOOK_SECRET` | Secret | API, worker | HMAC verification secret. Only the API verifies signatures, but the worker shares the startup config validation and requires the value. Rotate with care; multi-secret rotation is future work. |
-| `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS` | Parameter | API | Default-compatible value is `300`. |
-| `OUTBOX_DISPATCH_ENABLED` | Parameter | Worker | Usually `true`; can pause queue publication when set to `false`. |
-| `OUTBOX_DISPATCH_INTERVAL_MS` | Parameter | Worker | Default-compatible value is `1000`. |
-| `LOG_LEVEL` | Parameter | API, worker | Deployment target value for logging policy. Current code should be checked before relying on runtime log-level control. |
+Secret values come from Secrets Manager secrets that Terraform creates without values:
 
-Do not store AWS credentials inside application environment variables. Use ECS task execution roles and task roles.
+| Secret | Injected into | Value |
+| --- | --- | --- |
+| `DATABASE_URL` | API, worker, migration | PostgreSQL URL with a percent-encoded password and TLS parameters; see the [`DATABASE_URL` format](../infra/terraform/README.md#database_url-secret-format). |
+| `REDIS_URL` | API, worker | `redis://<host>:<port>`, or `rediss://` with transit encryption. |
+| `WEBHOOK_SECRET` | API, worker | HMAC secret of at least 16 characters. Only the API verifies signatures. |
+
+AWS credentials never go into the application environment. The task execution role pulls the image, reads the three secrets, and writes logs. The application calls no AWS APIs at runtime, so there is no task role. The application has no log-level setting.
 
 ## Networking and Security
 
-Recommended VPC layout:
+- Public subnets hold the ALB; private subnets hold the ECS tasks, RDS, and Redis. The scaffold takes an existing VPC, subnets, and route tables as inputs and creates none of them.
+- Tasks run without public IPs. By default they reach AWS through interface endpoints for ECR API, ECR Docker, CloudWatch Logs, and Secrets Manager, and through an S3 gateway endpoint for ECR image layers. With `create_private_egress_endpoints = false`, the task security group allows HTTPS to any address instead and the VPC must provide a NAT route; the scaffold creates no NAT gateway.
+- RDS and Redis have no public endpoints.
 
-- Public subnets contain the ALB.
-- Private application subnets contain ECS API and worker tasks.
-- Private data subnets contain RDS PostgreSQL and ElastiCache Redis.
-- ECS tasks should reach ECR, CloudWatch Logs, Secrets Manager, and S3-backed ECR layer objects through VPC endpoints by default. A NAT Gateway is an explicit approval and cost-risk alternative.
-- RDS and Redis have no public endpoint.
+Security groups:
 
-Security group model:
+- **ALB**: inbound HTTP on `alb_port` (default `80`) from `allowed_http_cidrs` (default `0.0.0.0/0`); outbound only to the tasks on `app_port`.
+- **ECS tasks**, shared by the API, worker, and migration task: inbound `app_port` only from the ALB; outbound to PostgreSQL, Redis, the interface endpoints on 443, and the S3 prefix list on 443.
+- **Interface endpoints**: inbound 443 only from the ECS task security group.
+- **RDS** and **Redis**: inbound on their ports only from the ECS task security group.
 
-- **ALB security group**: inbound HTTP on `alb_port` (default `80`) from `allowed_http_cidrs` in the MVP scaffold; outbound only to the API service port. An HTTPS listener on `443` with an approved certificate is required before real client traffic.
-- **ECS task security group**, shared by the API, worker, and migration tasks: inbound API port only from the ALB security group (the worker and migration task listen on no port); outbound to RDS, Redis, the private endpoint security group over HTTPS, and the S3 gateway endpoint prefix list over HTTPS for ECR image layers.
-- **Private endpoint security group**: inbound HTTPS only from the ECS task security group for interface endpoints. S3 gateway endpoint access is routed through approved private route tables.
-- **RDS security group**: inbound PostgreSQL port only from the ECS task security group.
-- **Redis security group**: inbound Redis port only from the ECS task security group.
+IAM: the task execution role is trusted only by `ecs-tasks.amazonaws.com` and may get an ECR authorization token, pull from the application repository, read the three runtime secrets, and write to the three task log groups. A future deployment pipeline role should be limited to pushing to this repository and updating these two services.
 
-IAM model:
+## Release and Rollback Strategy
 
-- ECS task execution role can pull from ECR, write CloudWatch logs, and fetch configured secrets.
-- The current Terraform scaffold includes execution permissions for ECR image pulls, task logs, and the specific runtime Secrets Manager placeholders referenced by ECS task definitions.
-- Application task role should be minimal. At MVP, it may only need read access to the specific secrets or parameters if the application loads them at runtime instead of ECS injecting them.
-- A future CI/CD role can publish to the specific ECR repository and update the specific ECS services, but should not have broad administrator access.
+Intended release order:
 
-## Migration and Release Flow
+1. Build the image from a commit, push it to ECR, and record the digest.
+2. Register task definitions that use the new image.
+3. Run the migration task; stop the release on a non-zero exit code.
+4. Roll the API service, then the worker service.
+5. Check `/health/serving` through the ALB and `/health/ready` as the operator check, then run the deployed smoke checks.
+6. Watch logs, outbox progress, and ALB 5xx responses during a monitoring window.
 
-Recommended future release order:
+In the scaffold, steps 2 and 4 happen in the same `terraform apply` of a new `container_image`, so step 3 cannot run between them. The runbook works around this for the first deployment by keeping both services at zero tasks until the migration has succeeded; see [Migrate and start the services](aws-deployment-runbook.md#migrate-and-start-the-services).
 
-1. Select the reviewed commit SHA for release.
-2. Run existing verification, including image build verification.
-3. Approve image publication for the target environment.
-4. Publish the immutable image tag to ECR and capture the digest.
-5. Set Terraform `container_image` to the approved immutable tag or digest.
-6. Register new ECS task definitions for API, worker, and migration task using that image.
-7. Run the migration as a one-off ECS task in private subnets only after explicit live-run approval.
-8. Confirm the migration task exits successfully, emits expected CloudWatch logs, and has an acceptable stopped reason and container exit code.
-9. Deploy the API service to the new task definition.
-10. Deploy the worker service to the new task definition.
-11. Verify `GET /health/serving` through the ALB target path, and use `GET /health/ready` as an operator/deploy-gate check.
-12. Run the approval-gated smoke test against the deployed API base URL using
-    [AWS deployed smoke test flow](aws-smoke-test-flow.md).
-13. Watch API, worker, outbox, and webhook processing logs after rollout.
+Migrations should stay backward compatible with the code that is still running (expand and contract: add schema, deploy code, backfill, and remove old schema in a later release). Destructive, revert, and large data-rewrite migrations need a written plan, including how to restore, before they run.
 
-Migrations must run before service rollout when code expects the new schema.
-Irreversible, destructive, revert, data-rewrite, or long-running migrations
-require separate explicit production review before execution. A non-zero
-migration exit code stops the API and worker rollout.
+Rollback:
 
-## CI/CD Path
+- Set `container_image` back to the previous digest and apply. Every image change replaces the task definitions, and because `skip_destroy` is not set, Terraform deregisters the previous revisions; a rollback therefore goes through Terraform rather than pointing a service at an old revision.
+- Rollback is straightforward only while the schema stays compatible with the previous image.
+- Redis queue state is not authoritative. Duplicate job delivery after a rollback is safe: the worker reloads rows from PostgreSQL under row locks, and processing is idempotent.
 
-Future CI/CD can extend the current GitHub Actions path without adding it in this phase:
-
-- Keep typecheck, lint, tests, build, Docker image build, schema drift check, dependency audit, and forbidden wording scan as release gates.
-- Current CI only builds the image locally as `transaction-event-gateway:ci`.
-- After verification passes on an approved branch or tag, request explicit approval before AWS authentication or image publication.
-- Publish the image to ECR with an immutable tag, such as the reviewed commit SHA, and record the digest.
-- Set Terraform `container_image` through an approved non-secret input path.
-- Register ECS task definitions with that image.
-- Follow the documented one-off migration task flow and stop on failure.
-- Update ECS services and wait for steady state.
-- Run `/health/serving`, operator `/health/ready`, and the documented deployed
-  smoke verification after deployment.
-
-Deployment credentials, registry authentication, image publication automation, and workflows are intentionally out of scope for the current Terraform scaffold.
-
-## Rollback Strategy
-
-Primary rollback:
-
-- Roll the ECS API service back to the previous task definition or image digest.
-- Roll the ECS worker service back to the matching previous task definition or image digest.
-- Verify `/health/serving`, operator `/health/ready`, and run the documented
-  deployed smoke checks after rollback when the rollback environment is approved
-  for smoke testing.
-
-Migration caution:
-
-- Rollback is straightforward only when the database schema remains backward-compatible.
-- Irreversible migrations, destructive changes, enum removals, and large data rewrites require a reviewed production plan before deployment.
-- Prefer expand-and-contract migration patterns for future changes: add compatible schema first, deploy code, backfill safely, then remove old schema in a later release.
-
-Redis rollback note:
-
-- Redis queue state is not authoritative. If worker rollback creates duplicate job delivery, PostgreSQL row locks and webhook idempotency should keep processing safe.
+CI runs the code, Docker, and Terraform checks but has no AWS access. A deploy pipeline would add an OIDC role limited to this ECR repository and these two ECS services, push by digest, run the migration task with a stop on failure, wait for the services to reach a steady state, and run the deployed smoke checks.
 
 ## Observability Minimum
 
-MVP observability:
+Provided by the scaffold and the application:
 
-- CloudWatch log groups for API, worker, and migration tasks.
-- Structured application logs with correlation IDs and safe identifiers.
-- ALB and ECS health checks.
-- API serving readiness via `GET /health/serving`; full operator readiness via
-  `GET /health/ready`.
-- Approval-gated deployed smoke test using
-  [AWS deployed smoke test flow](aws-smoke-test-flow.md). Keep it separate from
-  the local Docker Compose smoke script unless a future phase approves reuse.
-- Manual inspection of RDS state for outbox, webhook events, and processing attempts when diagnosing incidents.
+- Log groups `/ecs/<name_prefix>/api`, `/ecs/<name_prefix>/worker`, and `/ecs/<name_prefix>/migration`, kept for `ecs_log_retention_days` (default 30).
+- Structured log events with correlation IDs and safe identifiers. Nest's console logger prints each one as a prefix followed by the JSON event, with ANSI color codes unless `NO_COLOR` is set.
+- ALB health checks on `/health/serving` every 30 seconds; two consecutive failures mark a task unhealthy.
+- ECS service events and stopped-task reasons.
 
-Gaps to close after MVP:
+Not provided: CloudWatch alarms, dashboards, Container Insights, ALB access logs, tracing, and dead-letter inspection tooling. Before an environment runs unattended, add at least alarms on ALB 5xx responses, unhealthy targets, RDS free storage, and the log events listed in the runbook's [monitoring window](aws-deployment-runbook.md#monitoring-window).
 
-- Metrics dashboards for HTTP latency, queue depth, outbox lag, job failures, and worker processing latency.
-- Alerts for readiness failure, high 5xx rate, stuck outbox rows, failed webhook events, Redis unavailability, and database connection issues.
-- Distributed tracing.
-- Dead-letter inspection workflows.
-- Longer retention and export policy for logs.
+## Risks
 
-## Operational Risks and Gaps
+- The ALB listener is plain HTTP and `allowed_http_cidrs` defaults to `0.0.0.0/0`, so request bodies cross the internet unencrypted until an HTTPS listener exists.
+- Health endpoints are public and exempt from rate limiting, and the PostgreSQL health check uses a one-connection pool with a one-second connection timeout. A burst of requests to `/health/serving` can fail the ALB health checks and drain the API tasks.
+- The worker task has no container health check, so ECS keeps a hung worker running.
+- Node's default HTTP keep-alive timeout (5 seconds) is shorter than the ALB idle timeout (60 seconds; `alb.tf` does not change it), which can cause occasional ALB 502 responses.
+- RDS is single-AZ and Redis is one node without failover by default; Redis transit encryption is off by default.
+- Rotating `WEBHOOK_SECRET` needs application support for overlapping old and new secrets, which does not exist.
+- There is no manual retry API or admin tooling; recovery beyond the automatic outbox retries and reconciliation means inspecting PostgreSQL directly.
+- Worker scaling should stay conservative until queue behavior and row-lock contention have been measured.
 
-- The current image default starts the API process; ECS worker and migration tasks need explicit command overrides.
-- The current Terraform task definitions reference Secrets Manager placeholders for `DATABASE_URL`, `REDIS_URL`, and `WEBHOOK_SECRET`, but Terraform intentionally does not create secret versions or store their values.
-- Terraform backend support is enabled with an empty S3 backend block, but no remote backend is initialized. First apply still requires an approved state owner and approved backend config outside git.
-- The current Terraform ECS services are defined in private subnets with no public IPs. The scaffold defines the preferred VPC endpoint path for ECR API, ECR Docker, CloudWatch Logs, Secrets Manager, and S3-backed ECR layer access, but those endpoints are not live until approved VPC, subnet, private route table inputs, and apply approval are provided.
-- The current Terraform ECS services still require execution of the documented ECR image publishing path, approved secret value population, endpoint input review, the documented migration task flow, and apply approval before they can serve production traffic.
-- Before real multi-client traffic, decide and implement proxy-aware forwarded-IP handling plus distributed/shared rate limiting, or record the current process-local observed-source limiter as an accepted limitation.
-- The migration task flow is documented, but the live one-off run still requires explicit approval, an approved `DATABASE_URL` secret value, the approved image reference, backend/state approval, and private egress inputs before first ECS execution.
-- The deployed smoke test flow is documented, but the live run still requires
-  an approved deployed API base URL, completed migration/API/worker rollout,
-  approved non-production webhook values, and an approved evidence path before
-  execution.
-- `LOG_LEVEL` is a deployment design item, but current runtime support should be verified before using it as an operational control.
-- Worker scaling should be conservative until production-like queue behavior and database lock contention are measured.
-- The ALB target group uses `/health/serving` (config and PostgreSQL only), so a Redis incident does not remove API tasks from rotation: payment intent creation and webhook acceptance keep working because they do not depend on Redis. The full `/health/ready` (which also checks Redis) is reserved for operators and deploy gates, not for load balancer routing.
-- Manual retry operations exist conceptually in the runbook, but custom admin tooling is not part of this deployment MVP.
-- Webhook secret rotation is not complete without application support for overlapping old and new secrets.
-- The short-lived deploy runbook is documentation-only and has not been run.
-  No formal automated deployment runbook or incident alert policy is
-  implemented yet; the deployed smoke flow is also documentation-only and has
-  not been run.
+## Known Gaps Before the First Apply
 
-## Explicitly Not in MVP
+1. **PostgreSQL version.** `postgres_engine_version` defaults to `"16.6"` (`infra/terraform/variables.tf`; `example.tfvars` repeats it). RDS no longer offers 16.6 for new instances, so the first apply fails. Pin a currently available 16.x minor version.
+2. **Migration order.** One `container_image` feeds the API, worker, and migration task definitions (`infra/terraform/ecs-tasks.tf`). Changing it moves both services to new revisions in the same apply, with `desired_count = 1` by default, no deployment circuit breaker, and no wait for a steady state (`infra/terraform/ecs-services.tf`). A migration cannot run before the new code starts, and `/health/serving` passes against an empty schema: it only runs `SELECT 1` (`src/health/postgres-health-check.service.ts`), and the application neither creates nor migrates tables at startup (`src/database/typeorm-options.ts`).
+3. **Redis eviction policy.** `infra/terraform/redis.tf` sets no `parameter_group_name`, so ElastiCache uses the default parameter group, whose `maxmemory-policy` is `volatile-lru`. BullMQ requires `noeviction`; add a parameter group that sets it.
+4. **Interface endpoints.** `infra/terraform/private-egress.tf` places each interface endpoint in every subnet of `private_subnet_ids` with private DNS enabled. An interface endpoint accepts one subnet per Availability Zone, private DNS requires the VPC attributes DNS hostnames and DNS support, and existing endpoints with private DNS for the same services in the VPC conflict with these, as does an existing S3 gateway endpoint on the same route tables.
+5. **Database user.** The API and worker connect to RDS as the master user, the only database user the scaffold provisions (`infra/terraform/rds.tf`); there is no least-privilege application role.
+6. **CPU architecture.** The task definitions set no `runtime_platform` (`infra/terraform/ecs-tasks.tf`), so Fargate runs X86_64 images. An image built on an ARM machine without `--platform linux/amd64` does not start.
+7. **Database TLS and password rotation.** The image does not ship the Amazon RDS CA bundle (`Dockerfile`) that `sslmode=verify-full` needs, so database connections fail until it does. The RDS-managed master password rotates on a schedule, while `DATABASE_URL` is a static copy read at task start: after a rotation, tasks cannot open new connections until the secret is re-populated and the services are redeployed.
+8. **Retention and exposure.** No job deletes old webhook, idempotency, or outbox rows. `POST /payment-intents` requires no authentication (webhooks require only a valid signature), and every endpoint accepts JSON bodies up to 256 KB (`src/common/bootstrap.ts`), while RDS storage starts at 20 GiB and autoscales to 100 GiB (`infra/terraform/variables.tf`). Decide storage sizing, retention, and who may reach the ALB (`allowed_http_cidrs`) before exposing it.
+9. **Worker secret.** The worker task receives `WEBHOOK_SECRET` (`infra/terraform/ecs-tasks.tf`) although it never verifies signatures, because the shared configuration validation requires it (`src/config/env.validation.ts`).
 
-- Kubernetes or EKS.
-- Multi-region deployment.
-- Blue/green deployment automation.
-- Full observability stack with dashboards, alerts, tracing, and SLOs.
-- Sophisticated autoscaling policies.
-- Custom admin panel or manual retry UI.
-- Blockchain provider integration beyond the current signed webhook contract.
-- Autoscaling, app task roles, secret value population and rotation workflow, NAT Gateway implementation, and deployment workflow implementation in the current Terraform scaffold.
-- AWS credentials, secrets, or live deployment changes.
+## Out of Scope
 
-## Handoff Checklist for Infrastructure Phase
-
-- Review the current Terraform scaffold for ECR, security groups, ALB, private RDS PostgreSQL, private ElastiCache Redis, ECS task definitions, task log groups, ECS task execution IAM, and private VPC endpoint egress.
-- Confirm the Terraform state owner and approved backend config before the first remote backend init or apply.
-- Confirm approved existing VPC, private subnet, and private route table inputs before any apply that would create endpoint resources.
-- Review the current ECS cluster, API service, worker service, and migration task Terraform definitions, then follow the documented one-off migration task flow when a live run is approved.
-- Review ElastiCache Redis failover, Multi-AZ, TLS client settings, snapshots, and node sizing before production use.
-- Decide and implement proxy-aware/distributed rate limiting before real multi-client traffic, or explicitly accept the current observed-source, process-local limitation.
-- Configure TLS certificate, HTTPS listener, and production ALB hardening.
-- Add least-privilege app task role permissions only if runtime AWS API access becomes necessary.
-- Populate required Secrets Manager values after approval, including assembling `DATABASE_URL` from the RDS endpoint and AWS-managed PostgreSQL master user secret outside git.
-- Add CI/CD only after design review, with migration and rollback gates.
-- Review production migration expectations before first deployment, including the required result record from the one-off migration task flow.
-- Review the deployed smoke test flow and result record before first API/worker
-  rollout completion.
+Kubernetes or EKS, multi-region deployment, blue/green automation, autoscaling policies, a full observability stack (dashboards, alerting, tracing, SLOs), a manual retry API or admin UI, a NAT gateway, a secret rotation workflow, and deployment automation.

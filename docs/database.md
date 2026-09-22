@@ -35,7 +35,7 @@ webhook_processing_attempt_status:
   FAILED
 ```
 
-The first three enum groups should be PostgreSQL enum types because they guard durable state transitions. `webhook_processing_attempt_status` may be either an enum type or a constrained varchar in the MVP.
+The first three are PostgreSQL enum types because they guard durable state transitions. `webhook_processing_attempts.status` is a `varchar(64)` with a check constraint. The service writes only `SUCCEEDED` and `FAILED` attempts; `STARTED` is allowed by the constraint but not used.
 
 ## Tables
 
@@ -74,7 +74,7 @@ Correctness rationale:
 - Primary key gives stable durable identity for API responses and worker references.
 - Positive amount check prevents invalid persisted payment state.
 - Unique confirmed transaction hash prevents one external transaction from confirming multiple intents.
-- Status and time indexes support expiration scans and operational queries.
+- Status and time indexes support operational queries. No expiration job exists yet.
 - Client request and reference indexes support correlation without making those values authoritative identifiers.
 
 ### idempotency_records
@@ -217,7 +217,7 @@ Correctness rationale:
 
 ## Migration Order
 
-1. Enable required PostgreSQL extensions for UUID generation if the application does not generate UUIDs itself.
+1. Enable `pgcrypto`, which provides the `gen_random_uuid()` column defaults.
 2. Create enum types.
 3. Create `payment_intents`.
 4. Create `idempotency_records`.

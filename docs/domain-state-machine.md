@@ -1,502 +1,141 @@
-# Domain State Machine Specification
+# Domain State Machine
 
-Status: Current MVP lifecycle specification
-Scope: current MVP payment intent, webhook inbox, outbox, and worker lifecycle
-Source of truth: PostgreSQL durable state and current implementation
+This document lists the statuses of the durable records, who writes each status and when. The statuses are PostgreSQL enum types (`payment_intent_status`, `webhook_event_status`, `outbox_event_status`); the processing attempt status is a `varchar` with a check constraint. Columns and constraints are described in [database.md](database.md), and the flows that drive the transitions in [architecture.md](architecture.md).
 
-## 1. Purpose and Scope
+Every transition is written in a PostgreSQL transaction. BullMQ jobs carry only a `webhookEventId`; no status lives in Redis.
 
-This document describes the domain lifecycle for payment intent creation,
-signed webhook acceptance, transactional outbox dispatch, and worker
-processing.
+## Payment intent
 
-The state machine is intentionally centered on durable records:
-
-- `payment_intents`
-- `idempotency_records`
-- `webhook_events`
-- `outbox_events`
-- `webhook_processing_attempts`
-
-PostgreSQL is the source of truth for all lifecycle decisions. Redis and BullMQ
-are transport infrastructure only. BullMQ jobs carry durable PostgreSQL IDs and
-do not carry authoritative payment or webhook business data.
-
-This specification covers the implemented MVP behavior. It does not introduce
-new endpoints, retries, reconciliation, provider integrations, or state changes
-that are not present in the current code.
-
-## 2. Domain Entities
-
-### `PaymentIntent`
-
-Durable business object created by `POST /payment-intents`.
-
-Core lifecycle fields:
-
-- `id`
-- `status`
-- `amount`
-- `asset`
-- `destination`
-- `reference`
-- `clientRequestId`
-- `metadata`
-- `confirmedTxHash`
-- `failureReason`
-- `expiresAt`
-- `createdAt`
-- `updatedAt`
-
-The worker locks the payment intent before applying webhook processing rules.
-For a matching confirmed transaction event, the worker sets
-`status = CONFIRMED` and records `confirmedTxHash`.
-
-### `WebhookEvent`
-
-Durable inbox row created by `POST /webhooks/blockchain` after timestamp,
-signature, and DTO validation succeed.
-
-Core lifecycle fields:
-
-- `id`
-- `provider`
-- `externalEventId`
-- `nonce`
-- `eventType`
-- `paymentIntentId`
-- `txHash`
-- `payload`
-- `payloadHash`
-- `status`
-- `failureReason`
-- `receivedAt`
-- `processedAt`
-- `createdAt`
-- `updatedAt`
-
-The worker locks this row first. If it is already `PROCESSED`, worker
-processing exits successfully without mutating the payment intent.
-
-### `OutboxEvent`
-
-Durable work record inserted in the same PostgreSQL transaction as a newly
-accepted webhook event.
-
-Core lifecycle fields:
-
-- `id`
-- `type`
-- `aggregateType`
-- `aggregateId`
-- `payload`
-- `status`
-- `attempts`
-- `nextAttemptAt`
-- `lastError`
-- `createdAt`
-- `publishedAt`
-- `updatedAt`
-
-For webhook processing, `type = process-webhook-event`,
-`aggregateType = webhook_event`, and the payload contains only
-`webhookEventId`.
-
-### `WebhookProcessingAttempt`
-
-Audit row inserted by worker processing.
-
-Core lifecycle fields:
-
-- `id`
-- `webhookEventId`
-- `jobId`
-- `status`
-- `errorMessage`
-- `startedAt`
-- `finishedAt`
-- `createdAt`
-
-Attempt rows explain worker decisions. Correctness comes from
-`payment_intents` and `webhook_events`, not from attempt rows.
-
-### `IdempotencyRecord`
-
-Durable idempotency record used by `POST /payment-intents`.
-
-Core lifecycle fields:
-
-- `id`
-- `scope`
-- `idempotencyKey`
-- `requestHash`
-- `responseStatus`
-- `responseBody`
-- `resourceType`
-- `resourceId`
-- `createdAt`
-- `expiresAt`
-
-The idempotency record and payment intent are created in one PostgreSQL
-transaction.
-
-## 3. Payment Intent Statuses
-
-```text
-CREATED
-PROCESSING
-CONFIRMED
-FAILED
-EXPIRED
-```
-
-Meaning:
-
-- `CREATED`: the API created the payment intent and it is waiting for a
-  matching external confirmation event.
-- `PROCESSING`: durable enum value reserved by the broader lifecycle model. The
-  current webhook worker does not write this status before confirming a
-  matching event.
-- `CONFIRMED`: a matching confirmed transaction event was applied and
-  `confirmedTxHash` is set.
-- `FAILED`: terminal payment intent status. The current webhook worker does not
-  move an intent into this status for webhook validation failures.
-- `EXPIRED`: terminal payment intent status. Expiration processing is outside
-  the current worker implementation.
-
-Terminal payment intent statuses:
-
-```text
-CONFIRMED
-FAILED
-EXPIRED
-```
-
-Implemented worker transition behavior:
-
-| Current payment intent status | Matching confirmed webhook result | Payment intent effect | Webhook effect |
-| --- | --- | --- | --- |
-| `CREATED` | amount, asset, and transaction hash are valid | `CONFIRMED`, `confirmedTxHash` set | `PROCESSED` |
-| `PROCESSING` | amount, asset, and transaction hash are valid | `CONFIRMED`, `confirmedTxHash` set | `PROCESSED` |
-| `CONFIRMED` | same `confirmedTxHash` | No payment intent change | `PROCESSED` |
-| `CONFIRMED` | different transaction hash after other validation passes | No payment intent change | `FAILED` with `PAYMENT_INTENT_TERMINAL` |
-| `FAILED` | any otherwise valid confirmed webhook | No payment intent change | `FAILED` with `PAYMENT_INTENT_TERMINAL` |
-| `EXPIRED` | any otherwise valid confirmed webhook | No payment intent change | `FAILED` with `PAYMENT_INTENT_TERMINAL` |
-
-Payload mismatches, unsupported event types, missing transaction hashes, unknown
-payment intents, and transaction hash conflicts do not mutate the payment
-intent.
-
-## 4. Webhook Event Statuses
-
-```text
-RECEIVED
-QUEUED
-PROCESSING
-PROCESSED
-FAILED
-REJECTED
-```
-
-Meaning:
-
-- `RECEIVED`: signed webhook was accepted and persisted in the inbox.
-- `QUEUED`: outbox dispatcher published the BullMQ job and marked the durable
-  webhook event queued.
-- `PROCESSING`: worker locked the durable webhook event and started applying
-  processing rules.
-- `PROCESSED`: worker completed successfully. This includes an idempotent
-  success when the referenced payment intent is already confirmed with the same
-  transaction hash.
-- `FAILED`: worker completed with a durable domain failure reason.
-- `REJECTED`: durable enum value reserved for rejected webhook records. Current
-  HTTP signature, timestamp, and DTO rejections are not persisted as rows;
-  current worker domain failures are stored as `FAILED`.
-
-Webhook transition table:
-
-| From | To | Trigger |
-| --- | --- | --- |
-| none | `RECEIVED` | Valid signed webhook accepted into the inbox |
-| `RECEIVED` | `QUEUED` | Outbox dispatcher publishes the BullMQ job |
-| Current non-`PROCESSED` status reached by implemented flows | `PROCESSING` | Worker starts processing the durable event |
-| `PROCESSING` | `PROCESSED` | Worker applies a successful processing result |
-| `PROCESSING` | `FAILED` | Worker records a domain failure reason |
-| `PROCESSED` | `PROCESSED` | Duplicate job or direct retry exits as already processed |
-
-Current terminal webhook behavior:
-
-- `PROCESSED` is short-circuited by the worker and is not processed again.
-- `REJECTED` is a durable enum value for future persisted rejections; current
-  flows do not create `REJECTED` rows.
-
-`FAILED` is retryable by model, but the current public API does not implement a
-manual retry endpoint.
-
-## 5. Outbox Event Statuses
-
-```text
-PENDING
-PUBLISHED
-FAILED
-```
-
-Meaning:
-
-- `PENDING`: webhook work is durable but has not been published to BullMQ.
-- `PUBLISHED`: dispatcher published the BullMQ job and marked the outbox row
-  complete.
-- `FAILED`: dispatcher could not complete publication and recorded retry
-  metadata.
-
-Outbox transition table:
-
-| From | To | Trigger |
-| --- | --- | --- |
-| none | `PENDING` | New accepted webhook creates an outbox row in the same transaction |
-| `PENDING` | `PUBLISHED` | Dispatcher publishes job and marks webhook event `QUEUED` |
-| `PENDING` | `FAILED` | Dispatcher catches a publish or dispatch error |
-| `FAILED` | `PUBLISHED` | Dispatcher retry succeeds after `nextAttemptAt` |
-| `FAILED` | `FAILED` | Dispatcher retry fails again and increments `attempts` |
-
-Publishing to Redis and updating PostgreSQL are not atomic across systems.
-Duplicate job publication is acceptable because worker processing is idempotent
-and reloads state from PostgreSQL.
-
-## 6. Worker Processing Outcomes
-
-The processor returns one of three outcomes.
-
-| Outcome | Durable behavior |
+| Status | Written by |
 | --- | --- |
-| `already_processed` | The webhook event was already `PROCESSED`. Insert a `SUCCEEDED` processing attempt and do not mutate the payment intent. |
-| `processed` | Mark the webhook event `PROCESSED`, insert a `SUCCEEDED` processing attempt, and confirm the payment intent when a new valid confirmation was applied. |
-| `failed` with reason | Mark the webhook event `FAILED`, store `failureReason`, insert a `FAILED` processing attempt with the same reason, and leave the payment intent unchanged. |
+| `CREATED` | API, when `POST /payment-intents` creates the intent (`PaymentIntentsService`) |
+| `CONFIRMED` | Worker, when it applies a matching `transaction.confirmed` webhook (`WebhookEventProcessorService`) |
+| `PROCESSING`, `FAILED`, `EXPIRED` | Nothing. The values exist in the enum, but no code path writes them. |
 
-Domain failures are durable worker results. The BullMQ worker logs the failed
-domain result and returns normally; correctness is stored in PostgreSQL.
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED: POST /payment-intents
+    CREATED --> CONFIRMED: worker applies a matching confirmed event
+    PROCESSING --> CONFIRMED: same rule, but nothing sets PROCESSING
+```
 
-## 7. Failure Reasons
+Confirmation sets `confirmed_tx_hash` and clears `failure_reason`. `expires_at` stays null because there is no expiration process. The worker also handles the unused values if a row has them, for example after a manual update: it confirms a `PROCESSING` intent like a `CREATED` one, and it never changes a `CONFIRMED`, `FAILED` or `EXPIRED` intent. No transition leaves `CONFIRMED`, and confirming an intent writes no outbox event.
 
-| Reason | When recorded | State effect |
+## Webhook event
+
+| Status | Written by | Meaning |
 | --- | --- | --- |
-| `UNKNOWN_PAYMENT_INTENT` | The webhook references no existing payment intent row. | Webhook `FAILED`; no payment intent created. |
-| `UNSUPPORTED_EVENT_TYPE` | `payload.type` is not `transaction.confirmed`. | Webhook `FAILED`; no payment intent mutation. |
-| `MISSING_TX_HASH` | Confirmed transaction event has no non-empty string transaction hash. | Webhook `FAILED`; no payment intent mutation. |
-| `AMOUNT_MISMATCH` | Payload amount does not normalize to the payment intent amount. | Webhook `FAILED`; no payment intent mutation. |
-| `ASSET_MISMATCH` | Payload asset differs from the payment intent asset. | Webhook `FAILED`; no payment intent mutation. |
-| `PAYMENT_INTENT_TERMINAL` | Payment intent is `FAILED` or `EXPIRED`, or it is `CONFIRMED` with a different transaction hash after validation passes. | Webhook `FAILED`; terminal payment intent remains unchanged. |
-| `CONFIRMED_TX_HASH_CONFLICT` | Transaction hash is already attached to another payment intent. | Webhook `FAILED`; current payment intent remains unchanged. |
+| `RECEIVED` | API, in the transaction that also inserts the outbox row | A signed, valid webhook was accepted. |
+| `QUEUED` | Dispatcher, in the transaction that marks the outbox row `PUBLISHED`; only a `RECEIVED` row is updated | A job was published. |
+| `PROCESSING` | Worker, inside its transaction | Replaced by `PROCESSED` or `FAILED` before the transaction commits, so no committed row has this status. |
+| `PROCESSED` | Worker | The event was applied, or the intent was already confirmed with the same transaction hash. |
+| `FAILED` | Worker | A processing rule rejected the event; `failure_reason` holds the reason. |
+| `REJECTED` | Nothing | The value exists in the enum. Rejected requests are not persisted at all. |
 
-## 8. Idempotency Behavior
-
-### Payment Intent Replay
-
-Scope:
-
-```text
-payment-intents:create
+```mermaid
+stateDiagram-v2
+    [*] --> RECEIVED: API accepts the webhook
+    RECEIVED --> QUEUED: dispatcher publishes a job
+    RECEIVED --> PROCESSED: worker
+    RECEIVED --> FAILED: worker
+    QUEUED --> PROCESSED: worker
+    QUEUED --> FAILED: worker
+    FAILED --> PROCESSED: worker, on a duplicate job
+    FAILED --> FAILED: worker, on a duplicate job
 ```
 
-Rules:
+- The worker processes an event in any status other than `PROCESSED`. It usually finds `QUEUED`. It finds `RECEIVED` when it locks the row before the dispatcher's transaction marks it `QUEUED`; once the worker has committed, the dispatcher's conditional update changes nothing.
+- `PROCESSED` is final. A later job for the event records a `SUCCEEDED` attempt and changes nothing else.
+- Nothing re-queues a `FAILED` event on purpose: reconciliation only looks at `RECEIVED` and `QUEUED` events, and there is no retry endpoint. A duplicate job for a `FAILED` event, for example one published again after a dispatcher transaction rolled back, runs the rules again against the current payment intent.
+- An exception inside the worker transaction restores the previous status. After five failed attempts the event therefore keeps its previous status, normally `QUEUED`, and a `QUEUED` event waits until reconciliation re-queues its outbox row (see [Outbox event](#outbox-event)).
+- `processed_at` is set when the worker commits `PROCESSED` or `FAILED`.
 
-- The API canonicalizes the logical create payload and stores a SHA-256 request
-  hash.
-- Same `Idempotency-Key` and same logical payload returns the stored response
-  with `200 OK` and `Idempotent-Replayed: true`.
-- Replay does not create a second payment intent.
-- Replay does not create an outbox event or webhook event.
+### Processing rules
 
-### Idempotency Conflict
+The worker runs these steps in one transaction and stops at the first one that decides the outcome. Every failure marks the webhook `FAILED` with the reason and leaves the payment intent unchanged.
 
-Rules:
+1. Lock the webhook row (`SELECT ... FOR UPDATE`). If the row does not exist, the worker throws `WEBHOOK_EVENT_NOT_FOUND`; the exception fails the job attempt and BullMQ retries it.
+2. The event is `PROCESSED`: record a `SUCCEEDED` attempt and return `already_processed`.
+3. Set `PROCESSING` and clear `failure_reason` and `processed_at`.
+4. `payload.type` is not `transaction.confirmed`: `UNSUPPORTED_EVENT_TYPE`.
+5. `payload.txHash` is not a non-empty string: `MISSING_TX_HASH`.
+6. Lock the payment intent named by `payment_intent_id`. If none exists: `UNKNOWN_PAYMENT_INTENT`. Payment intents are never created from webhooks.
+7. The amounts differ when compared as decimals with 18 fractional digits (`"125.5"` matches a stored `125.50`): `AMOUNT_MISMATCH`. The assets differ: `ASSET_MISMATCH`. Only amount and asset are compared; the signed webhook carries no `reference`.
+8. The intent is `CONFIRMED`: with the same `confirmed_tx_hash`, mark the webhook `PROCESSED` without changing the intent; with another hash, `PAYMENT_INTENT_TERMINAL`.
+9. The intent is `FAILED` or `EXPIRED`: `PAYMENT_INTENT_TERMINAL`.
+10. Lock the intent that already holds this transaction hash, if any. If it is a different intent: `CONFIRMED_TX_HASH_CONFLICT`.
+11. Set the intent to `CONFIRMED` with `confirmed_tx_hash`, mark the webhook `PROCESSED` and record a `SUCCEEDED` attempt.
 
-- Same `Idempotency-Key` and different logical payload returns `409 Conflict`
-  with `IDEMPOTENCY_CONFLICT`.
-- The original payment intent and idempotency record are not mutated.
-- Correctness is enforced by the PostgreSQL unique constraint on
-  `(scope, idempotency_key)` plus request hash comparison.
+These seven reasons are the complete set (`ProcessingFailureReason` in `src/processing/webhook-event-processor.service.ts`). If two workers confirm different intents with the same transaction hash at the same time, the partial unique index on `confirmed_tx_hash` rejects the second update; that job attempt fails, and its retry records `CONFIRMED_TX_HASH_CONFLICT`.
 
-### Webhook Duplicate Event
+### Job outcomes
 
-Rules:
+| Result | Webhook | Payment intent | Attempt row | BullMQ job |
+| --- | --- | --- | --- | --- |
+| `already_processed` | Unchanged | Unchanged | `SUCCEEDED` | Completes; logged as `worker_job_processed` |
+| `processed` | `PROCESSED` | `CONFIRMED`, unless it already was with the same hash | `SUCCEEDED` | Completes; logged as `worker_job_processed` |
+| `failed` with a reason | `FAILED` with the reason | Unchanged | `FAILED`, reason in `error_message` | Completes; logged as `worker_job_failed` (warn) with the reason as `errorCode` |
+| Exception | Previous status (rollback) | Unchanged (rollback) | None (rollback) | The attempt fails and BullMQ retries it, up to 5 attempts. Failed attempts are logged as `worker_job_failed`, and the fifth, final failure as `worker_job_exhausted`. |
 
-- Same provider event ID and same payload hash returns `202 Accepted` with
-  `ALREADY_ACCEPTED`.
-- The existing webhook inbox row is reused.
-- No additional outbox row is inserted for the duplicate acceptance path.
+A domain failure is a durable result, so BullMQ does not retry it.
 
-### Nonce Replay
+## Outbox event
 
-Rules:
+Outbox rows exist only for webhook processing: `type = process-webhook-event`, `aggregate_type = webhook_event`, `aggregate_id` is the webhook event ID, and `payload` is `{ webhookEventId }`.
 
-- Same provider nonce reused for a different event returns `409 Conflict` with
-  `WEBHOOK_NONCE_REPLAY`.
-- The new payload is not persisted.
-- No outbox row or BullMQ job is created for the replayed nonce.
+| Status | `dead_at` | Meaning |
+| --- | --- | --- |
+| `PENDING` | null | Stored with the webhook, not published yet. |
+| `PUBLISHED` | null | A job was published; `published_at` records when. |
+| `FAILED` | null | Waiting for a retry at `next_attempt_at`. |
+| `FAILED` | set | Poison payload; never selected again. |
 
-## 9. Valid High-Level Flows
-
-### Create Payment Intent
-
-```text
-Client
-  -> POST /payment-intents with Idempotency-Key
-  -> PostgreSQL transaction
-  -> insert idempotency_records
-  -> insert payment_intents with status CREATED
-  -> store response snapshot on idempotency_records
-  -> commit
-  -> return 201 Created
+```mermaid
+stateDiagram-v2
+    state "FAILED with dead_at" as DEAD
+    [*] --> PENDING: API accepts a webhook
+    PENDING --> PUBLISHED: job published
+    PENDING --> FAILED: publish failed
+    FAILED --> PUBLISHED: retry published
+    FAILED --> FAILED: retry failed
+    PUBLISHED --> FAILED: reconciler requeues a stale row
+    PENDING --> DEAD: poison payload
+    FAILED --> DEAD: poison payload
 ```
 
-Durable result:
+A row is due for dispatch when `dead_at` is null and it is `PENDING`, or `FAILED` with `next_attempt_at` null or in the past. The dispatcher takes due rows oldest first, at most 50 per batch, with `FOR UPDATE SKIP LOCKED` (see [architecture.md](architecture.md#dispatch-the-outbox)).
 
-- `payment_intents.status = CREATED`
-- `idempotency_records.responseStatus = 201`
-- `idempotency_records.resourceType = payment_intent`
-- `idempotency_records.resourceId = payment_intents.id`
+| Transition | Actor and trigger | Column changes |
+| --- | --- | --- |
+| none to `PENDING` | API accepts a webhook, in the same transaction as the inbox row | `attempts = 0` |
+| `PENDING` or due `FAILED` to `PUBLISHED` | Dispatcher published the job; the same transaction marks the webhook `QUEUED` | `published_at` set to now; `next_attempt_at` and `last_error` cleared; `attempts` unchanged |
+| `PENDING` or due `FAILED` to `FAILED` | Dispatcher: transient publish failure (Redis, BullMQ or the publisher) | `attempts` + 1; `next_attempt_at` = now + min(5 s * 2^(attempts - 1), 5 min), using the new `attempts`; `last_error` = sanitized error message; `dead_at` null |
+| `PENDING` or due `FAILED` to `FAILED` with `dead_at` | Dispatcher: deterministic poison payload, `webhookEventId` missing or not a string | `attempts` + 1; `next_attempt_at` null; `last_error = INVALID_OUTBOX_PAYLOAD`; `dead_at` set to now |
+| `PUBLISHED` to `FAILED` | Reconciler, every 60 s: published more than 10 minutes ago and the webhook is still `RECEIVED` or `QUEUED` | `next_attempt_at = now()`; `last_error = STALE_PUBLISHED_WEBHOOK_REQUEUED`; `attempts` unchanged; `dead_at` stays null |
 
-### Accept Signed Webhook
+- Transient failures are retried indefinitely, with delays of 5, 10, 20, 40, 80 and 160 s and then 5 minutes. `attempts` only counts failed publishes.
+- A dead row is not retried until an operator repairs its payload and clears `dead_at`.
+- The reconciler handles at most 100 rows per run. Its details, including why a job can be lost after `PUBLISHED`, are in [architecture.md](architecture.md#reconcile-stale-published-events).
+- Publishing and committing are not atomic, so one outbox row can produce more than one job. The worker rules above make duplicates harmless.
 
-```text
-Provider
-  -> POST /webhooks/blockchain
-  -> validate timestamp
-  -> verify HMAC over timestamp, nonce, and raw body
-  -> validate DTO
-  -> PostgreSQL transaction
-  -> insert webhook_events with status RECEIVED
-  -> insert outbox_events with status PENDING
-  -> commit
-  -> return 202 Accepted
-```
+## Processing attempts
 
-Durable result:
+`webhook_processing_attempts` records worker decisions for operators; correctness never depends on it. Rows are inserted inside the worker transaction:
 
-- `webhook_events.status = RECEIVED`
-- `outbox_events.status = PENDING`
-- The outbox payload contains only `webhookEventId`
+- `SUCCEEDED` for `processed` and `already_processed`, with `error_message` null;
+- `FAILED` for a domain failure, with the reason in `error_message`.
 
-### Dispatch Outbox
+`job_id` holds the BullMQ job ID. `STARTED` is allowed by the check constraint but never written. An attempt that throws leaves no row, because the insert rolls back with the rest of the transaction; such failures are visible only in the worker log and in BullMQ.
 
-```text
-Dispatcher
-  -> select eligible PENDING or retryable FAILED outbox rows with row locks
-  -> publish BullMQ job with webhookEventId
-  -> mark webhook_events RECEIVED -> QUEUED
-  -> mark outbox_events PUBLISHED
-```
+## Requests that change no state
 
-Durable result on success:
-
-- `webhook_events.status = QUEUED`
-- `outbox_events.status = PUBLISHED`
-- `outbox_events.publishedAt` is set
-
-Durable result on dispatch failure:
-
-- `outbox_events.status = FAILED`
-- `outbox_events.attempts` increments
-- `outbox_events.nextAttemptAt` is set
-- `outbox_events.lastError` stores a sanitized error
-- The webhook event remains durable for a later dispatch attempt
-
-### Process Webhook Event
-
-```text
-Worker
-  -> receive BullMQ job containing webhookEventId
-  -> PostgreSQL transaction
-  -> lock webhook_events row
-  -> exit successfully if already PROCESSED
-  -> mark webhook_events PROCESSING
-  -> validate event type, tx hash, payment intent, amount, asset, and terminal state
-  -> lock payment_intents row when present
-  -> confirm matching payment intent or record durable webhook failure
-  -> insert webhook_processing_attempts
-  -> commit
-```
-
-Durable result on success:
-
-- `payment_intents.status = CONFIRMED` when a new confirmation is applied
-- `payment_intents.confirmedTxHash` is set when a new confirmation is applied
-- `webhook_events.status = PROCESSED`
-- `webhook_events.processedAt` is set
-- `webhook_processing_attempts.status = SUCCEEDED`
-
-Durable result on domain failure:
-
-- `payment_intents` remains unchanged
-- `webhook_events.status = FAILED`
-- `webhook_events.failureReason` is set
-- `webhook_events.processedAt` is set
-- `webhook_processing_attempts.status = FAILED`
-
-## 10. What Does Not Emit a State Change
-
-The following cases do not create a new durable lifecycle transition:
-
-- Invalid webhook signature: no webhook event, no outbox event, no job.
-- Stale webhook timestamp: no webhook event, no outbox event, no job.
-- Invalid webhook DTO: no webhook event, no outbox event, no job.
-- Duplicate payment intent replay with the same payload: returns stored response
-  and creates no new payment intent.
-- Payment intent idempotency conflict: returns `409 Conflict` and does not
-  mutate the original payment intent.
-- Duplicate identical webhook event: returns `ALREADY_ACCEPTED` and creates no
-  new inbox or outbox row.
-- Webhook event ID conflict: returns `409 Conflict` and does not persist the
-  conflicting payload.
-- Nonce replay: returns `409 Conflict` and does not persist the new payload.
-- Already `PROCESSED` webhook event: worker records a `SUCCEEDED` attempt but
-  does not mutate the payment intent.
-- Confirmed payment intent with the same transaction hash: worker marks the
-  webhook event `PROCESSED` and does not mutate the payment intent.
-- Worker domain validation failure: worker marks the webhook event `FAILED` and
-  leaves the payment intent unchanged.
-- Outbox publish failure: no payment intent transition occurs; the outbox row
-  is retryable from PostgreSQL state.
-
-The current implementation does not create downstream domain outbox events when
-a payment intent becomes `CONFIRMED`; the existing outbox is the durable bridge
-from accepted webhook inbox rows to BullMQ processing jobs.
-
-## 11. Source of Truth Boundary
-
-PostgreSQL owns:
-
-- Payment intent status and confirmed transaction hash.
-- Idempotency key, request hash, and response replay snapshot.
-- Webhook event status, payload hash, failure reason, and processed timestamp.
-- Outbox status, attempt count, retry timestamp, and sanitized dispatch error.
-- Worker processing attempt audit rows.
-
-Redis and BullMQ own:
-
-- Job transport.
-- Retry scheduling for queue execution.
-- Worker delivery.
-
-Redis and BullMQ do not own:
-
-- Payment intent correctness.
-- Webhook idempotency.
-- Nonce replay protection.
-- Outbox completion truth.
-- Worker decision truth.
-
-## 12. Future Extensions Deferred
-
-The following lifecycle extensions are intentionally outside this phase:
-
-- Manual retry endpoint for failed webhook events.
-- Durable `REJECTED` rows for post-acceptance rejected events.
-- Worker-written `PROCESSING` payment intent transitions before confirmation.
-- Expiration process that moves stale intents to `EXPIRED`.
-- Explicit payment intent `FAILED` transitions from webhook domain failures.
-- Additional provider event types beyond `transaction.confirmed`.
-- Reversal, chargeback, or reorg states after `CONFIRMED`.
-- Downstream domain event publication for payment intent status changes.
-- Reconciliation for unknown or delayed external events.
+| Request | Response | Rows written |
+| --- | --- | --- |
+| Webhook rejected before the database: body size, body guard, headers, timestamp, signature or DTO | 400, 401 or 413 | None |
+| Webhook with a known event ID and the same payload | 202 `ALREADY_ACCEPTED` | None |
+| Webhook with a known event ID and a different payload | 409 `WEBHOOK_EVENT_CONFLICT` | None |
+| Webhook with a new event ID and a used nonce | 409 `WEBHOOK_NONCE_REPLAY` | None |
+| Payment intent request with a missing `Idempotency-Key` or an invalid or oversized body | 400 or 413 | None |
+| Payment intent request with a known key and the same body | 200 with `Idempotent-Replayed: true` | None |
+| Payment intent request with a known key and a different body | 409 `IDEMPOTENCY_CONFLICT` | None |
+| Any request over the rate limit | 429 | None |

@@ -1,441 +1,137 @@
 # AWS Terraform Scaffold
 
-## Status
+Terraform configuration for running `transaction-event-gateway` on AWS: ECS Fargate API and worker services with a one-off migration task definition, private RDS PostgreSQL, private ElastiCache Redis, an HTTP Application Load Balancer, ECR, Secrets Manager placeholders for the runtime secrets, CloudWatch log groups, a minimal task execution role, security groups, and private VPC endpoints. The configuration has never been applied. Formatting and validation need no AWS credentials.
 
-This directory is an incremental Terraform scaffold for a future AWS MVP
-deployment of `transaction-event-gateway`. It currently defines the ECR
-repository needed to store application images, the minimal security groups for
-ALB, ECS tasks, RDS PostgreSQL, and ElastiCache Redis resources, the MVP HTTP
-Application Load Balancer path for the API service, a private RDS PostgreSQL
-instance, a private ElastiCache Redis replication group, ECS Fargate task
-definitions for the API, worker, and one-off migration runtime units, and ECS
-cluster/API/worker service resources. It also includes the minimal ECS task
-execution role, CloudWatch log groups, and Secrets Manager placeholders needed
-by those task definitions, plus a configurable private VPC endpoint egress path
-for ECR image pulls, CloudWatch Logs, Secrets Manager runtime secrets, and
-S3-backed ECR layer access. Terraform backend support is enabled with an empty
-S3 backend block, and the backend/state decision is documented, but no remote
-backend is initialized. It is not ready for `apply` and does not require AWS
-credentials for formatting or validation.
+- [AWS deployment design](../../docs/aws-deployment-design.md): target shape, decisions, and the [known gaps before the first apply](../../docs/aws-deployment-design.md#known-gaps-before-the-first-apply).
+- [AWS deployment runbook](../../docs/aws-deployment-runbook.md): first deployment, migration, smoke checks, monitoring, and teardown.
 
-The ECR image publishing path is documented in
-[`../../docs/ecr-image-publishing.md`](../../docs/ecr-image-publishing.md), but
-it has not been executed. No image has been published, no registry
-authentication is configured, and no deploy workflow exists in this scaffold.
-Current CI only verifies the Docker image locally.
+## Contents
 
-The one-off ECS migration task flow is documented in
-[`../../docs/aws-migration-task-flow.md`](../../docs/aws-migration-task-flow.md),
-but it has not been executed. The migration task definition exists; no task
-runner, deploy workflow, or live AWS run is added by this scaffold.
-
-The deployed smoke test flow is documented in
-[`../../docs/aws-smoke-test-flow.md`](../../docs/aws-smoke-test-flow.md), but it
-has not been executed. No deployed API base URL is provided by this scaffold,
-and no live smoke run is approved in this phase.
-
-The short-lived deploy runbook is documented in
-[`../../docs/aws-short-lived-deploy-runbook.md`](../../docs/aws-short-lived-deploy-runbook.md),
-but it has not been executed. It connects the guardrails, backend/state owner,
-private egress inputs, secret population, image approval, migration gate,
-API/worker rollout gate, deployed smoke gate, monitoring window, and teardown
-decision for a future approval-gated AWS run.
-
-The current Terraform files are intended to support structure review,
-formatting, and validation only. They should not be used to create, update, or
-delete live infrastructure in this phase without explicit approval.
-
-## Current contents
-
-- `versions.tf`: Terraform and AWS provider version constraints.
-- `providers.tf`: AWS provider configuration through variables only. No
-  credentials are configured here.
-- `backend.hcl.example`: placeholder-only S3 backend config template for a
-  future approved remote backend. Copy values into ignored `backend.hcl` only
-  after backend ownership and environment values are approved.
-- `variables.tf`: baseline inputs for region, naming, image reference,
-  existing networking, HTTP allow-list, ports, health check path, and tags.
-- `locals.tf`: shared naming and tag values for future resources.
-- `main.tf`: phase overview and future resource group notes.
-- `ecr.tf`: ECR repository, immutable tag policy, scan-on-push setting, AES256
-  encryption, and a small image retention policy.
-- `runtime-config.tf`: Secrets Manager secret metadata for runtime values.
-  It intentionally creates no secret versions or plaintext values.
-- `security-groups.tf`: security groups and explicit rules for the future ALB,
-  ECS tasks, private interface endpoints, RDS PostgreSQL, and Redis network
-  path.
-- `private-egress.tf`: preferred private VPC endpoint path for ECR API, ECR
-  Docker, CloudWatch Logs, Secrets Manager, and S3-backed ECR layer access.
-- `alb.tf`: internet-facing ALB, HTTP target group, and HTTP listener for the
-  API service.
-- `rds.tf`: private DB subnet group and RDS PostgreSQL instance.
-- `redis.tf`: private ElastiCache Redis subnet group and replication group.
-- `ecs-tasks.tf`: ECS Fargate task definitions for API, worker, and migration
-  tasks, plus minimal task execution IAM and task log groups.
-- `ecs-services.tf`: ECS cluster plus Fargate API and worker services. The API
-  service is attached to the ALB target group; the worker has no load balancer.
-- `outputs.tf`: scaffold outputs plus ECR repository, security group IDs, VPC
-  endpoint IDs, and ALB, RDS, Redis, ECS cluster/service, ECS task definition,
-  and execution role values.
-- `example.tfvars`: dummy values for local review. Do not put real secrets here.
-
-## Planned AWS resource phases
-
-The resource implementation should continue in small phases after review:
-
-1. Environment layout and approved backend config before the first remote
-   backend init or apply.
-2. Approved VPC, subnet, and private route table input review for a real
-   endpoint apply; optional managed VPC can be revisited later.
-3. Approved ECR image publishing and `container_image` selection.
-4. Review the documented one-off migration task flow before any approved live
-   run.
-5. Review the documented deployed smoke test flow before any approved smoke run
-   against a deployed API base URL.
-6. Review the short-lived deploy runbook before any first short-lived AWS
-   deploy attempt.
-7. HTTPS listener, ACM certificate, and optional production ALB hardening.
-8. Approved runtime secret value population, including assembling
-   `DATABASE_URL` from the RDS endpoint and RDS-managed PostgreSQL secret
-   outside git.
-9. Application task role permissions only if a later phase needs runtime AWS
-   API access beyond ECS-managed image pulls and logs.
-10. Release workflow design after explicit approval.
+- `versions.tf`: Terraform `>= 1.6.0, < 2.0.0`, AWS provider `>= 5.0, < 7.0`, and the empty `backend "s3" {}` block.
+- `providers.tf`: AWS provider with the region from `aws_region` and the common tags as default tags; no credentials.
+- `backend.hcl.example`: template for the untracked `backend.hcl`.
+- `variables.tf`: the inputs listed below.
+- `locals.tf`: the name prefix `<project_name>-<environment>` and the common tags.
+- `main.tf`: comments only.
+- `ecr.tf`: ECR repository and lifecycle policy.
+- `security-groups.tf`: security groups and rules for the ALB, ECS tasks, interface endpoints, RDS, and Redis.
+- `private-egress.tf`: S3 gateway endpoint and interface endpoints for ECR API, ECR Docker, CloudWatch Logs, and Secrets Manager.
+- `alb.tf`: internet-facing ALB, IP target group, and HTTP listener.
+- `rds.tf`: DB subnet group and PostgreSQL instance.
+- `redis.tf`: ElastiCache subnet group and Redis replication group.
+- `runtime-config.tf`: Secrets Manager secrets for `DATABASE_URL`, `REDIS_URL`, and `WEBHOOK_SECRET`, without values.
+- `ecs-tasks.tf`: log groups, task execution role and policy, and the API, worker, and migration task definitions.
+- `ecs-services.tf`: ECS cluster and the API and worker services.
+- `outputs.tf`: names, endpoints, and ARNs used by the runbook.
+- `example.tfvars`: placeholder values for validation and a starting point for a real tfvars file; it contains no real IDs or secrets.
 
 ## Variables
 
-| Variable | Purpose |
-| --- | --- |
-| `aws_region` | Target AWS region for future resources. |
-| `project_name` | Short ECR-safe name used in future resource names and tags. Lowercase letters and digits with single hyphens between segments. |
-| `environment` | Short ECR-safe environment name such as `dev`, `stage`, or `qa`. Lowercase letters and digits with single hyphens between segments. Keep `<project_name>-<environment>` at 32 characters or fewer: the ALB and target group names use it directly, so the default project name leaves room for at most six environment characters. |
-| `container_image` | Future ECS image reference. Use only an approved immutable tag or digest in real environments; never use `latest`. |
-| `api_task_cpu` | Fargate CPU units for the API task definition. |
-| `api_task_memory` | Fargate memory in MiB for the API task definition. |
-| `worker_task_cpu` | Fargate CPU units for the worker task definition. |
-| `worker_task_memory` | Fargate memory in MiB for the worker task definition. |
-| `migration_task_cpu` | Fargate CPU units for the one-off migration task definition. |
-| `migration_task_memory` | Fargate memory in MiB for the one-off migration task definition. |
-| `api_desired_count` | Desired number of API ECS service tasks. Defaults to `1` for scaffold review. |
-| `worker_desired_count` | Desired number of worker ECS service tasks. Defaults to `1` for scaffold review. |
-| `ecs_log_retention_days` | CloudWatch Logs retention for API, worker, and migration task log groups. |
-| `app_environment_variables` | Additional or overriding non-secret environment variables injected into all ECS task definitions. Base defaults include `NODE_ENV=production`, `PORT=3000`, `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS=300`, `OUTBOX_DISPATCH_ENABLED=true`, `OUTBOX_DISPATCH_INTERVAL_MS=1000`, and reserved `OUTBOX_MAX_ATTEMPTS=10`; do not place secrets here. Transient outbox publish failures retry indefinitely, so do not rely on `OUTBOX_MAX_ATTEMPTS` to limit Redis outage retries. |
-| `create_vpc` | Future switch for managed VPC creation. Current scaffold does not create VPC resources. |
-| `vpc_id` | Existing VPC ID for security groups. |
-| `public_subnet_ids` | Public subnets intended for a future ALB. |
-| `private_subnet_ids` | Private subnets intended for future ECS, RDS, Redis, and migration tasks. |
-| `private_route_table_ids` | Private route tables that should receive the S3 gateway endpoint route. Required before an approved apply when private egress endpoints are enabled. |
-| `create_private_egress_endpoints` | Defines the preferred VPC endpoint path for private ECS egress. Defaults to `true`; no NAT Gateway is created. |
-| `allowed_http_cidrs` | IPv4 CIDR blocks allowed to reach the future public ALB over HTTP. Defaults to `["0.0.0.0/0"]` as an MVP placeholder. |
-| `app_port` | API container port. Defaults to `3000`. |
-| `alb_port` | Future public ALB HTTP port. Defaults to `80`. |
-| `alb_enable_deletion_protection` | ALB deletion protection switch. Defaults to `false` for this no-apply MVP scaffold. |
-| `postgres_port` | PostgreSQL port for future RDS access. Defaults to `5432`. |
-| `postgres_engine_version` | PostgreSQL engine version. Defaults to `16.6`. |
-| `postgres_instance_class` | RDS PostgreSQL instance class. Defaults to `db.t4g.micro`. |
-| `postgres_allocated_storage` | Initial PostgreSQL storage in GiB. Defaults to `20`. |
-| `postgres_max_allocated_storage` | Maximum autoscaled PostgreSQL storage in GiB. Defaults to `100`. |
-| `postgres_db_name` | Initial PostgreSQL database name. Defaults to `transaction_event_gateway`. |
-| `postgres_username` | PostgreSQL master username. The password is managed by RDS and is not stored in Terraform files. |
-| `postgres_backup_retention_days` | Automated backup retention in days. Defaults to `7`. |
-| `postgres_multi_az` | Multi-AZ switch for PostgreSQL. Defaults to `false` for this no-apply MVP scaffold. |
-| `postgres_deletion_protection` | RDS deletion protection switch. Defaults to `false` for this no-apply MVP scaffold. |
-| `postgres_skip_final_snapshot` | RDS final snapshot skip switch. Defaults to `true` for this no-apply MVP scaffold; production should usually set this to `false`. |
-| `redis_port` | Redis port for ElastiCache access. Defaults to `6379`. |
-| `redis_node_type` | ElastiCache Redis node type. Defaults to `cache.t4g.micro` for scaffold review. |
-| `redis_engine_version` | Redis engine version. Defaults to `7.1`. |
-| `redis_num_cache_clusters` | Number of Redis cache clusters in the replication group. Defaults to `1`; use at least `2` with automatic failover. |
-| `redis_automatic_failover_enabled` | Redis automatic failover switch. Defaults to `false` for this no-apply MVP scaffold. |
-| `redis_multi_az_enabled` | Redis Multi-AZ switch. Defaults to `false`; requires automatic failover when enabled. |
-| `redis_at_rest_encryption_enabled` | Redis at-rest encryption switch. Defaults to `true`. |
-| `redis_transit_encryption_enabled` | Redis in-transit encryption switch. Defaults to `false` for this no-apply MVP scaffold. The app accepts both `redis://` and `rediss://`; when this is `true`, populate `REDIS_URL` with `rediss://`. |
-| `redis_snapshot_retention_limit` | Redis automatic snapshot retention in days. Defaults to `7`; use `0` to disable snapshots. |
-| `redis_apply_immediately` | Whether Redis changes should apply immediately. Defaults to `false` so reviewed changes can wait for the next maintenance window. |
-| `health_check_path` | Future ALB health check path. Defaults to `/health/serving` (configuration and PostgreSQL only). |
-| `tags` | Additional non-secret tags for future AWS resources. |
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `aws_region` | `us-east-1` | Region for all resources. |
+| `project_name` | `transaction-event-gateway` | 3 to 48 lowercase letters or digits with single hyphens between segments. |
+| `environment` | `dev` | 2 to 32 characters, same rules. `<project_name>-<environment>` names the ALB and target group, which allow 32 characters, so the default project name leaves at most six characters for the environment; validation does not check this. |
+| `container_image` | `example.invalid/transaction-event-gateway:replace-me` | Image for all three task definitions: an ECR digest or immutable tag, never `latest`. |
+| `api_task_cpu`, `api_task_memory` | `512`, `1024` | Fargate CPU units and MiB for the API task. Validation checks each value separately; the pair must also be a supported Fargate combination. |
+| `worker_task_cpu`, `worker_task_memory` | `512`, `1024` | Same for the worker task. |
+| `migration_task_cpu`, `migration_task_memory` | `256`, `512` | Same for the migration task. |
+| `api_desired_count` | `1` | API tasks; `0` is allowed. |
+| `worker_desired_count` | `1` | Worker tasks; `0` is allowed. |
+| `health_check_path` | `/health/serving` | ALB target health check (configuration and PostgreSQL only). |
+| `health_check_grace_period_seconds` | `60` | Time before the API service acts on failed ALB health checks of a new task. |
+| `ecs_log_retention_days` | `30` | Retention of the three task log groups. |
+| `app_environment_variables` | `{}` | Extra or overriding non-secret environment for all task definitions; see the base values in the [design](../../docs/aws-deployment-design.md#secrets-and-environment). Keys must be uppercase and must not be `DATABASE_URL`, `REDIS_URL`, `WEBHOOK_SECRET`, or AWS credentials. A `PORT` that differs from `app_port` makes the container listen on a port the target group does not use. |
+| `create_vpc` | `false` | Reserved; no VPC resources are defined, and the value only changes the `networking_mode` output. |
+| `vpc_id` | `null` | Existing VPC. |
+| `public_subnet_ids` | `[]` | Existing public subnets for the ALB, in at least two Availability Zones. |
+| `private_subnet_ids` | `[]` | Existing private subnets for the tasks, RDS, Redis, and interface endpoints: one per Availability Zone, at least two zones. |
+| `private_route_table_ids` | `[]` | Route tables of the private subnets; they receive the S3 gateway endpoint route. A precondition fails the plan when the list is empty and endpoints are enabled. |
+| `create_private_egress_endpoints` | `true` | Create the VPC endpoints. With `false`, the task security group allows HTTPS to any address and the VPC must provide a NAT route. |
+| `allowed_http_cidrs` | `["0.0.0.0/0"]` | IPv4 CIDR blocks allowed to reach the ALB. |
+| `app_port` | `3000` | Container port, target group port, and the default `PORT`. |
+| `alb_port` | `80` | ALB HTTP listener port. |
+| `alb_enable_deletion_protection` | `false` | ALB deletion protection. |
+| `postgres_port` | `5432` | PostgreSQL port. |
+| `postgres_engine_version` | `16.6` | RDS no longer offers 16.6 for new instances; set a currently available 16.x version. |
+| `postgres_instance_class` | `db.t4g.micro` | RDS instance class. |
+| `postgres_allocated_storage` | `20` | Initial storage in GiB. |
+| `postgres_max_allocated_storage` | `100` | Storage autoscaling limit in GiB. |
+| `postgres_db_name` | `transaction_event_gateway` | Initial database name. |
+| `postgres_username` | `app` | Master username; RDS manages the password in its own Secrets Manager secret. |
+| `postgres_backup_retention_days` | `7` | Automated backup retention in days. |
+| `postgres_multi_az` | `false` | Multi-AZ deployment. |
+| `postgres_deletion_protection` | `false` | RDS deletion protection. |
+| `postgres_skip_final_snapshot` | `true` | With `false`, destroy keeps a final snapshot named `<name_prefix>-postgres-final-snapshot`. |
+| `redis_port` | `6379` | Redis port. |
+| `redis_node_type` | `cache.t4g.micro` | ElastiCache node type. |
+| `redis_engine_version` | `7.1` | Redis engine version. |
+| `redis_num_cache_clusters` | `1` | Nodes in the replication group; at least `2` with automatic failover. |
+| `redis_automatic_failover_enabled` | `false` | Automatic failover. |
+| `redis_multi_az_enabled` | `false` | Multi-AZ; requires automatic failover. |
+| `redis_at_rest_encryption_enabled` | `true` | At-rest encryption. |
+| `redis_transit_encryption_enabled` | `false` | In-transit encryption; with `true`, `REDIS_URL` must use `rediss://`. |
+| `redis_snapshot_retention_limit` | `7` | Automatic snapshot retention in days; `0` disables snapshots. |
+| `redis_apply_immediately` | `false` | `false` defers Redis changes to the next maintenance window. |
+| `tags` | `{}` | Extra tags merged into the default tags. |
 
-## Current resource scope
+## Resources
 
-This phase defines only ECR, security group, ALB, RDS PostgreSQL, ElastiCache
-Redis, ECS task definition, ECS cluster/service, minimal ECS task execution IAM,
-ECS task log group, and private VPC endpoint resources:
+**ECR.** `aws_ecr_repository.app`, named `<name_prefix>`, has immutable tags, scan on push, and AES256 encryption; `aws_ecr_lifecycle_policy.app` expires all but the 30 most recent images. There is no `force_delete`, so destroy fails while the repository holds images.
 
-- `aws_ecr_repository.app`: application image repository named from
-  `local.name_prefix`, with immutable image tags, scan on push, and AES256
-  encryption.
-- `aws_ecr_lifecycle_policy.app`: retention policy that keeps the most recent
-  30 images.
-- `aws_security_group.alb`: security group intended for the future public ALB.
-- `aws_security_group.ecs_tasks`: security group intended for future ECS API and
-  worker tasks.
-- `aws_security_group.rds`: security group intended for future RDS PostgreSQL.
-- `aws_security_group.redis`: security group intended for future ElastiCache
-  Redis.
-- `aws_security_group.private_egress_endpoints`: security group attached to
-  private VPC interface endpoints when `create_private_egress_endpoints` is
-  enabled.
-- `aws_vpc_security_group_ingress_rule.alb_http`: allows HTTP on `alb_port`
-  from `allowed_http_cidrs`.
-- `aws_vpc_security_group_egress_rule.alb_to_ecs_tasks`: allows the ALB to reach
-  ECS tasks on `app_port`.
-- `aws_vpc_security_group_ingress_rule.ecs_tasks_from_alb`: allows ECS tasks to
-  receive `app_port` traffic only from the ALB security group.
-- `aws_vpc_security_group_egress_rule.ecs_tasks_to_postgres`: allows ECS tasks
-  to reach PostgreSQL on `postgres_port`.
-- `aws_vpc_security_group_egress_rule.ecs_tasks_to_redis`: allows ECS tasks to
-  reach Redis on `redis_port`.
-- `aws_vpc_security_group_egress_rule.ecs_tasks_to_private_egress_endpoints`:
-  allows ECS tasks to reach private VPC interface endpoints over HTTPS.
-- `aws_vpc_security_group_egress_rule.ecs_tasks_to_s3_gateway_endpoint`: allows
-  ECS tasks to reach S3 over HTTPS through the S3 gateway endpoint prefix list.
-  ECR serves image layers from S3, so without this rule image pulls fail with
-  `CannotPullContainerError`.
-- `aws_vpc_security_group_egress_rule.ecs_tasks_to_https_via_nat`: defined only
-  when `create_private_egress_endpoints = false`; allows HTTPS to any address so
-  tasks can reach AWS APIs through an operator-provided NAT route.
-- `aws_vpc_security_group_ingress_rule.private_egress_endpoints_from_ecs_tasks`:
-  allows HTTPS inbound to private VPC interface endpoints only from the ECS task
-  security group.
-- `aws_vpc_security_group_ingress_rule.rds_from_ecs_tasks`: allows PostgreSQL
-  from the ECS tasks security group only.
-- `aws_vpc_security_group_ingress_rule.redis_from_ecs_tasks`: allows Redis from
-  the ECS tasks security group only.
-- `aws_vpc_endpoint.s3`: gateway endpoint for S3 access through
-  `private_route_table_ids`, needed for ECR layer/object access when using VPC
-  endpoints. A precondition fails the plan when `private_route_table_ids` is
-  empty, because an S3 gateway endpoint without routes cannot serve image
-  layers.
-- `aws_vpc_endpoint.interface`: interface endpoints for ECR API, ECR Docker,
-  CloudWatch Logs, and Secrets Manager in `private_subnet_ids`, with private DNS
-  enabled.
-- `aws_lb.api`: internet-facing Application Load Balancer in
-  `public_subnet_ids`, using the ALB security group.
-- `aws_lb_target_group.api`: HTTP target group on `app_port` with
-  `target_type = "ip"` for future ECS Fargate API tasks and `/health/serving`
-  health checks.
-- `aws_lb_listener.http`: MVP HTTP listener on `alb_port` that forwards to the
-  API target group. Until an approved deployment registers healthy API targets,
-  the listener can return no-target responses from the empty target group.
-- `aws_db_subnet_group.postgres`: DB subnet group built only from
-  `private_subnet_ids`.
-- `aws_db_instance.postgres`: private RDS PostgreSQL instance using
-  `aws_security_group.rds.id`, encrypted `gp3` storage, automated backups, and
-  an AWS-managed master user password.
-- `aws_elasticache_subnet_group.redis`: Redis subnet group built only from
-  `private_subnet_ids`.
-- `aws_elasticache_replication_group.redis`: private Redis replication group
-  using `aws_security_group.redis.id`, at-rest encryption, automatic snapshots,
-  and configurable failover, Multi-AZ, node sizing, and transit encryption.
-- `aws_secretsmanager_secret.database_url`: metadata-only placeholder for the
-  complete `DATABASE_URL` value consumed by ECS tasks. Terraform does not create
-  a secret version or store the value.
-- `aws_secretsmanager_secret.redis_url`: metadata-only placeholder for the
-  complete `redis://` or `rediss://` `REDIS_URL` value consumed by ECS tasks.
-  Terraform does not create a secret version or store the value.
-- `aws_secretsmanager_secret.webhook_secret`: metadata-only placeholder for
-  `WEBHOOK_SECRET`. Terraform does not create a secret version or store the
-  value.
-- `aws_cloudwatch_log_group.api`: log group for future API task logs.
-- `aws_cloudwatch_log_group.worker`: log group for future worker task logs.
-- `aws_cloudwatch_log_group.migration`: log group for future one-off migration
-  task logs.
-- `aws_iam_role.ecs_task_execution`: ECS task execution role trusted only by
-  `ecs-tasks.amazonaws.com`.
-- `aws_iam_role_policy.ecs_task_execution`: minimal execution permissions for
-  pulling from the app ECR repository, authorizing ECR image pulls, fetching
-  only the configured runtime secret placeholders, and writing streams/events to
-  the task log groups.
-- `aws_ecs_task_definition.api`: Fargate API task definition using
-  `var.container_image`, `node dist/main.js`, the configured `app_port`, and
-  the API log group. It injects non-secret runtime environment values plus
-  `DATABASE_URL`, `REDIS_URL`, and `WEBHOOK_SECRET` from Secrets Manager.
-- `aws_ecs_task_definition.worker`: Fargate worker task definition using
-  `var.container_image`, `node dist/worker.js`, and the worker log group. It
-  injects non-secret runtime environment values plus `DATABASE_URL`,
-  `REDIS_URL`, and `WEBHOOK_SECRET` from Secrets Manager because the worker
-  uses the shared application config validation.
-- `aws_ecs_task_definition.migration`: Fargate one-off migration task
-  definition using `var.container_image`, `npm run migration:run:prod`, and
-  the migration log group. It injects non-secret runtime environment values
-  plus `DATABASE_URL` from Secrets Manager.
-- `aws_ecs_cluster.main`: ECS cluster for the API and worker services.
-- `aws_ecs_service.api`: Fargate API service using
-  `aws_ecs_task_definition.api.arn`, `private_subnet_ids`,
-  `aws_security_group.ecs_tasks.id`, `assign_public_ip = false`, and
-  `api_desired_count`. It registers the `api` container on `app_port` with
-  `aws_lb_target_group.api.arn`.
-- `aws_ecs_service.worker`: Fargate worker service using
-  `aws_ecs_task_definition.worker.arn`, `private_subnet_ids`,
-  `aws_security_group.ecs_tasks.id`, `assign_public_ip = false`, and
-  `worker_desired_count`. It has no load balancer attachment.
+**Load balancer.** `aws_lb.api` is internet-facing in `public_subnet_ids`. `aws_lb_target_group.api` forwards HTTP to `app_port` with `target_type = "ip"` and checks `health_check_path` every 30 seconds (5-second timeout, two checks to change state, `200` expected). `aws_lb_listener.http` forwards `alb_port` to the target group. There is no HTTPS listener, certificate, redirect, WAF, or access logging.
 
-The migration task definition uses the compiled production migration script.
-The one-off run flow is documented, but a real ECS migration run still requires
-explicit live-run approval, the approved image reference, populated
-`DATABASE_URL`, approved backend/state handling, approved private egress inputs,
-and result recording before API/worker rollout.
+**ECS.** `aws_ecs_cluster.main` (`<name_prefix>-cluster`, no Container Insights) runs `aws_ecs_service.api` and `aws_ecs_service.worker` on Fargate in `private_subnet_ids` with the ECS task security group and `assign_public_ip = false`. The API service registers container `api` on `app_port` with the target group; the worker has no load balancer. The services have no autoscaling and no deployment circuit breaker, and Terraform does not wait for them to reach a steady state.
 
-The deployed smoke flow is documented, but a real smoke run still requires an
-approved deployed API base URL, completed migration/API/worker rollout,
-approved non-production webhook values, an approved evidence path, and result
-recording. This scaffold does not add smoke automation or prove that a deployed
-API is reachable.
+| Task definition | Command | Secrets | Log group |
+| --- | --- | --- | --- |
+| `aws_ecs_task_definition.api` | `node dist/main.js` | `DATABASE_URL`, `REDIS_URL`, `WEBHOOK_SECRET` | `/ecs/<name_prefix>/api` |
+| `aws_ecs_task_definition.worker` | `node dist/worker.js` | `DATABASE_URL`, `REDIS_URL`, `WEBHOOK_SECRET` | `/ecs/<name_prefix>/worker` |
+| `aws_ecs_task_definition.migration` | `npm run migration:run:prod` | `DATABASE_URL` | `/ecs/<name_prefix>/migration` |
 
-The target group health check uses `/health/serving`. That endpoint checks
-required app configuration and PostgreSQL through the application's isolated
-health pool, excluding Redis so Redis incidents do not drain API tasks that can
-still accept durable PostgreSQL-backed writes. Full `/health/ready` still checks
-configuration, PostgreSQL, and Redis for operators and deploy gates. See
-[`../../docs/aws-deployment-design.md`](../../docs/aws-deployment-design.md) for
-the deployment trade-off.
+All three use `container_image`, the same non-secret environment, and the task execution role. They set no `runtime_platform` (Fargate runs X86_64) and no task role. The worker needs `WEBHOOK_SECRET` only because the shared configuration validation requires it.
 
-The RDS instance sets `publicly_accessible = false` and uses the private DB
-subnet group. It is reachable only through the existing RDS security group rule
-that allows PostgreSQL from the ECS tasks security group. The ECS task
-definitions receive `DATABASE_URL` through a dedicated Secrets Manager
-placeholder. Terraform does not assemble that URL because doing so safely would
-require handling the generated RDS password; instead, an approved deployment
-step must populate the placeholder from the RDS endpoint, database name, and
-AWS-managed RDS master user secret outside git.
+**IAM and logs.** `aws_iam_role.ecs_task_execution` is trusted only by `ecs-tasks.amazonaws.com`. Its inline policy allows `ecr:GetAuthorizationToken`, pulling from the application repository, `secretsmanager:GetSecretValue` on the three runtime secrets, and writing log streams and events to the three task log groups. The log groups keep events for `ecs_log_retention_days` and are deleted on destroy.
 
-Populate the `DATABASE_URL` secret as a plaintext value, not as a Secrets
-Manager key/value JSON document, in this form:
+**Secrets.** `aws_secretsmanager_secret.database_url`, `.redis_url`, and `.webhook_secret` are named `<name_prefix>/runtime/database-url`, `/redis-url`, and `/webhook-secret` and have a 7-day recovery window. Terraform creates no secret versions, so the values never enter the Terraform state.
+
+**RDS.** `aws_db_subnet_group.postgres` uses `private_subnet_ids`. `aws_db_instance.postgres` (`<name_prefix>-postgres`) has encrypted `gp3` storage with autoscaling, `publicly_accessible = false`, the RDS security group, automated backups, `copy_tags_to_snapshot`, `apply_immediately = false`, `auto_minor_version_upgrade = true`, and the default parameter group. With `manage_master_user_password = true`, RDS keeps the master password in its own Secrets Manager secret, whose ARN is the sensitive output `postgres_master_user_secret_arn`.
+
+**Redis.** `aws_elasticache_subnet_group.redis` uses `private_subnet_ids`. `aws_elasticache_replication_group.redis` (`<name_prefix>-redis`) has the Redis security group, the default parameter group, and by default at-rest encryption and automatic snapshots; it takes no final snapshot on delete. Preconditions require at least two nodes for automatic failover and automatic failover for Multi-AZ. Redis is queue infrastructure only; PostgreSQL holds the durable state.
+
+**Networking.** The configuration uses an existing VPC, subnets, and route tables and creates none of them; there is no NAT gateway. `aws_vpc_endpoint.s3` is a gateway endpoint on `private_route_table_ids`. `aws_vpc_endpoint.interface` creates endpoints for `ecr.api`, `ecr.dkr`, `logs`, and `secretsmanager` in every subnet of `private_subnet_ids`, with private DNS enabled. Security group rules:
+
+- ALB: inbound HTTP on `alb_port` from `allowed_http_cidrs`; outbound to the tasks on `app_port`.
+- ECS tasks: inbound `app_port` from the ALB; outbound to PostgreSQL, Redis, the interface endpoint security group on 443, and the S3 prefix list on 443. ECR serves image layers from S3, so without the S3 rule image pulls fail with `CannotPullContainerError`. With `create_private_egress_endpoints = false`, one rule allowing 443 to `0.0.0.0/0` replaces the two endpoint rules.
+- Interface endpoints: inbound 443 from the ECS task security group.
+- RDS and Redis: inbound on their ports from the ECS task security group only.
+
+## `DATABASE_URL` Secret Format
+
+Store the value as plain text, not as a JSON key/value secret:
 
 ```text
-postgresql://<username>:<percent-encoded-password>@<rds-endpoint>:5432/<db-name>?sslmode=verify-full&sslrootcert=<path-to-rds-ca-bundle>
+postgresql://<username>:<percent-encoded-password>@<postgres_address>:<postgres_port>/<postgres_database_name>?sslmode=verify-full&sslrootcert=<path-to-rds-ca-bundle>
 ```
 
-- Percent-encode the password (for example with `encodeURIComponent`). RDS
-  generated passwords can contain characters such as `#`, `?`, or `%`.
-  Unencoded, `#` and `?` fail URL parsing at startup, `%` followed by
-  non-hex characters fails with `URI malformed`, and `%` followed by two hex
-  digits silently decodes into a different password.
-- RDS for PostgreSQL 15 and later rejects unencrypted connections by default
-  (`rds.force_ssl = 1`). The `pg` driver used here treats `sslmode=require` as
-  `verify-full`, so the Amazon RDS CA bundle must be trusted: either reference a
-  bundle file shipped in the image with `sslrootcert`, or set
-  `NODE_EXTRA_CA_CERTS` to it. The current image does not ship the bundle; add
-  it in an approved image change before the first live deployment.
-- The RDS-managed master user secret rotates on a schedule, while
-  `DATABASE_URL` is a static copy read only at task start. After each rotation
-  the copy stops working until it is re-populated and the services are
-  redeployed. For a short-lived run, record the rotation schedule in the
-  deployment timebox; a longer-lived environment should inject only the
-  `password` key of the managed secret and build the URL in the application.
-- Config validation reports a malformed URL without echoing its value, so a
-  wrongly formatted secret does not print the password into task logs.
+- `<postgres_address>`, `<postgres_port>`, and `<postgres_database_name>` are the Terraform outputs of the same names. Do not use `postgres_endpoint` here: it already ends with `:<port>`.
+- `<username>` and the password are the `username` and `password` keys of the RDS-managed secret whose ARN is the `postgres_master_user_secret_arn` output; the username equals `postgres_username`.
+- Percent-encode the password, for example with `encodeURIComponent` or jq's `@uri`. RDS-generated passwords can contain `#`, `?`, or `%`: unencoded, `#` and `?` break URL parsing at startup, `%` followed by non-hex characters fails with `URI malformed`, and `%` followed by two hex digits silently decodes into a different password.
+- RDS for PostgreSQL 15 and later rejects unencrypted connections by default (`rds.force_ssl = 1`). The `pg` driver treats `sslmode=require` as `verify-full`, so the Amazon RDS CA bundle must be trusted: reference a bundle file shipped in the image with `sslrootcert`, or point `NODE_EXTRA_CA_CERTS` at it. The current image does not contain the bundle.
+- The RDS-managed master password rotates on a schedule, while `DATABASE_URL` is a static copy read at task start. After a rotation, re-populate the secret and redeploy the services. A longer-lived environment should inject only the `password` key of the managed secret and build the URL in the application.
+- Configuration validation reports a malformed URL without echoing it, so a wrongly formatted secret does not print the password into task logs.
 
-RDS uses `manage_master_user_password = true`, so Terraform does not take or
-store a plaintext database password. The AWS-managed master user secret ARN is
-exposed as a sensitive output for later wiring.
+The runbook builds this value from the outputs without exposing the password. The other two secrets are `REDIS_URL` (`redis://<redis_primary_endpoint_address>:<redis_port>`, or `rediss://` with `redis_transit_encryption_enabled = true`; the TLS path has not been exercised against ElastiCache) and `WEBHOOK_SECRET` (a random value of at least 16 characters). Never put these values, AWS credentials, account IDs, or real ARNs into `.tf` files or committed tfvars files.
 
-The Redis replication group uses a private ElastiCache subnet group built from
-`private_subnet_ids` and is attached only to `aws_security_group.redis.id`.
-Redis is not public and is reachable only from future ECS tasks through the
-existing Redis security group rule. Redis backs BullMQ queue infrastructure; it
-is not the source of truth for accepted webhook work or payment state.
+## State Backend
 
-Redis at-rest encryption defaults to enabled. Redis in-transit encryption
-defaults to disabled in this no-apply scaffold. Populate the `REDIS_URL`
-placeholder with a `redis://` URL built from the Redis primary endpoint and
-port. The application accepts `rediss://` as well and passes it to the Redis
-client, which then connects over TLS; a move to Redis TLS enables
-`redis_transit_encryption_enabled` and switches the secret to `rediss://` in the
-same reviewed change. That TLS path has not been exercised against ElastiCache
-yet.
+`versions.tf` contains an empty `backend "s3" {}` block, so `plan` and `apply` need `terraform init -backend-config=backend.hcl` first. Create `backend.hcl` from `backend.hcl.example` (git ignores it): an S3 state bucket with encryption, a state key per environment, the region, and exactly one locking mechanism, either a DynamoDB table or `use_lockfile = true` for S3-native locking on Terraform versions that support it. The bucket and any lock table are created outside this configuration. Never commit bucket names, account IDs, ARNs, credentials, or state files.
 
-The ECS task definitions include non-secret environment variables through base
-locals plus `app_environment_variables`; secret runtime values are injected
-through ECS `secrets` references. Do not put `DATABASE_URL`, `REDIS_URL`,
-`WEBHOOK_SECRET`, AWS credentials, account IDs, real ARNs, or other secret
-values in Terraform or tfvars files. Because secret values are not populated by
-Terraform, the task definitions and services remain registration scaffolding,
-not a complete runnable deployment.
+The provider lock file `.terraform.lock.hcl` is ignored by git; commit it once the configuration is applied from a shared backend, so every operator uses the same provider builds.
 
-The ECS services are defined in private subnets with `assign_public_ip = false`.
-The preferred private egress path is represented by VPC endpoints: ECR API, ECR
-Docker, CloudWatch Logs, and Secrets Manager interface endpoints, plus an S3
-gateway endpoint for ECR layer/object access. The ECS task security group allows
-HTTPS egress to the interface endpoint security group and to the S3 gateway
-endpoint prefix list. These resources are still
-scaffold only until approved existing VPC, private subnet, and private route
-table inputs are supplied and a live apply is explicitly approved. A NAT Gateway
-is not defined here and remains an explicit approval and cost-risk alternative.
+## Local Validation
 
-The services are not ready to run production traffic after apply until a real
-container image is available in ECR through the approved publishing path,
-runtime secret values are populated through an approved path, the private
-egress endpoint inputs and routes are confirmed, and apply/deployment approval
-is granted.
-
-`container_image` is the handoff point from the approved image publication to
-Terraform. It is consumed by the API, worker, and migration task definitions.
-Keep the committed default as the non-routable placeholder
-`example.invalid/transaction-event-gateway:replace-me`; for a future approved
-deployment, supply the value through an environment-specific ignored tfvars
-file or an explicitly approved variable input. Acceptable values are an
-approved immutable ECR tag such as
-`<ecr-repository-url>:git-<full-commit-sha>` or a digest such as
-`<ecr-repository-url>@sha256:<image-digest>`. Do not use `latest`, branch tags,
-local-only tags, account-specific repository URLs, account IDs, credentials,
-ARNs, tokens, or secrets in committed files without separate approval.
-
-No application task role is defined in this phase because ECS injects configured
-runtime secrets before the container starts and the application does not call
-AWS APIs at runtime. Add an app task role only when a later AWS-integration
-phase needs scoped runtime permissions.
-
-No VPC, subnet, route table, NAT gateway, autoscaling, secret version/value
-management, deployment automation, image publication, registry authentication,
-one-off migration task runner/workflow, or deployed smoke automation is
-implemented in this phase.
-
-Existing VPC, subnet, and private route table IDs are variables only. This
-scaffold does not use Terraform data sources or modules.
-
-The ALB listener is HTTP-only for this MVP scaffold. HTTPS, ACM certificate
-wiring, redirects, WAF, and other production hardening belong to later phases
-after explicit review.
-
-Do not store AWS credentials, account IDs, secret values, real ARNs, database
-passwords, database URLs, Redis URLs, or webhook secrets in Terraform files or
-tfvars files.
-
-Before production use, review RDS deletion protection, backup retention, final
-snapshot behavior, Multi-AZ, storage sizing, maintenance settings, and the
-database migration strategy. Also review Redis transit encryption and client
-configuration, automatic snapshots, failover, Multi-AZ, and node sizing. The
-scaffold defaults favor no-apply review, not production durability.
-
-## State backend decision
-
-Backend support is enabled in this scaffold with an empty `backend "s3" {}`
-block. No real backend values are committed, no remote backend is initialized,
-no state bucket or lock table was created by this phase, and no live Terraform
-command was run. During local review and CI-style validation, use
-`terraform init -backend=false`; this keeps validation independent from AWS
-credentials and avoids creating Terraform state.
-
-Before any first apply, the deployment owner must approve the Terraform state
-owner, region, S3 state bucket, encryption policy, access model, and locking
-mechanism. The future backend should use an S3 state bucket with encryption and
-either DynamoDB locking or S3-native lockfile locking when supported by the
-approved Terraform version.
-
-Backend values must not be committed. Use `backend.hcl.example` as a
-placeholder-only template, then supply real values through ignored
-`backend.hcl` or an explicitly approved command during a future backend init.
-No S3 bucket, DynamoDB table, state file, account ID, ARN, credential, token, or
-secret is added by this phase.
-
-The provider lock file is also ignored under `infra/terraform` while this
-repository uses temporary-copy or backend-disabled scaffold validation. Revisit
-committing `.terraform.lock.hcl` when the first approved remote backend workflow
-is established.
-
-## Safe validation commands
-
-These commands are allowed for scaffold review:
+These commands need no AWS credentials and create no state; CI runs the same three:
 
 ```bash
 terraform -chdir=infra/terraform fmt -check
@@ -443,23 +139,13 @@ terraform -chdir=infra/terraform init -backend=false
 terraform -chdir=infra/terraform validate
 ```
 
-`init -backend=false` may download the Terraform provider from the Terraform
-registry, but it should not contact AWS APIs and should not require AWS
-credentials. If run in the repository rather than a temporary copy, generated
-Terraform working files remain untracked by `.gitignore`.
+`init -backend=false` downloads the AWS provider from the Terraform registry but does not contact AWS. The generated `.terraform/` directory is ignored by git.
 
-## Commands requiring explicit approval
+## Commands That Create or Destroy Resources
 
-Do not run these commands for this phase without explicit approval:
+`terraform plan` needs AWS credentials and the initialized backend but changes nothing. The following commands create, change, or delete billable resources; the [runbook](../../docs/aws-deployment-runbook.md) gives their order and arguments:
 
-```bash
-terraform -chdir=infra/terraform plan
-terraform -chdir=infra/terraform apply
-terraform -chdir=infra/terraform destroy
-terraform -chdir=infra/terraform import
-aws ecr get-login-password
-docker push
-```
-
-Also do not add deployment workflows, push images to ECR, create AWS resources,
-or add credentials or secret values.
+- `terraform -chdir=infra/terraform apply` and `terraform -chdir=infra/terraform destroy`, with the environment's tfvars file.
+- `docker push` to the ECR repository, after `aws ecr get-login-password | docker login ...`.
+- `aws ecs run-task` for the migration task.
+- `aws secretsmanager put-secret-value` for the runtime secrets.

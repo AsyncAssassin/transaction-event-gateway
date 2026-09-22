@@ -24,7 +24,7 @@ Production-style NestJS backend for idempotent payment intents, signed webhook i
 | Reliability | PostgreSQL constraints, transactions, row locks, canonical request hashes, HMAC replay protection, transactional outbox |
 | Observability | Structured logs, correlation IDs, liveness/readiness checks, smoke script, operational runbook |
 | Testing | Typecheck, lint, Jest unit/e2e/worker coverage, build, local smoke flow |
-| AWS status | Terraform scaffold defines core ECS/RDS/Redis/ALB shape for review; no live apply or deployment yet |
+| AWS | Terraform scaffold for ECR, ALB, ECS Fargate, RDS PostgreSQL, and ElastiCache Redis; validated in CI, never applied |
 
 ## Implemented Features
 
@@ -60,21 +60,16 @@ Main reliability boundaries:
 
 Detailed documentation:
 
-- [Architecture](docs/architecture.md): service topology, flows, state machines, transaction boundaries, and non-goals.
+- [Architecture](docs/architecture.md): topology, request and processing flows, transaction boundaries, and design decisions.
 - [Domain state machine](docs/domain-state-machine.md): payment intent, webhook inbox, outbox, and worker lifecycle transitions.
-- [API specification](docs/api.md): endpoint contracts, validation rules, error shapes, and OpenAPI expectations.
+- [API specification](docs/api.md): endpoint contracts, validation rules, error shapes, and OpenAPI notes.
 - [Database specification](docs/database.md): tables, enum types, constraints, migration order, and rollback notes.
-- [Failure modes](docs/failure-modes.md): expected behavior for duplicate requests, webhook replays, queue failures, and worker crashes.
-- [Testing strategy](docs/testing.md): unit, integration, e2e, worker, concurrency, and smoke coverage expectations.
-- [Operational runbook](docs/runbook.md): health checks, database inspection, outbox diagnosis, worker troubleshooting, and local reset commands.
-- [AWS deployment design](docs/aws-deployment-design.md): target AWS shape, release flow, observability minimum, and explicit gaps.
-- [AWS deploy guardrails](docs/aws-deploy-guardrails.md): cost guardrails, first-deploy prerequisites, and teardown checklist before live AWS usage.
-- [ECR image publishing path](docs/ecr-image-publishing.md): approval-gated future image selection, immutable tag/digest, and Terraform handoff rules.
-- [One-off ECS migration task flow](docs/aws-migration-task-flow.md): approval-gated future migration task run order, stop conditions, and result record.
-- [AWS deployed smoke test flow](docs/aws-smoke-test-flow.md): approval-gated future deployed API smoke checks, evidence policy, and result record.
-- [AWS short-lived deploy runbook](docs/aws-short-lived-deploy-runbook.md): documentation-only preflight, approved order, required records, stop points, and teardown decision for a future short-lived AWS run.
-- [Terraform scaffold notes](infra/terraform/README.md): current IaC scope, validation-only status, and approval-gated commands.
-- [Implementation plan](docs/implementation-plan.md): phased implementation history and current documentation status.
+- [Failure modes](docs/failure-modes.md): behavior under duplicate requests, webhook replays, queue and database failures, and known limitations.
+- [Testing](docs/testing.md): unit and e2e suites, CI checks, and the local smoke script.
+- [Operational runbook](docs/runbook.md): health checks, database inspection, outbox and worker diagnosis, and local reset commands.
+- [AWS deployment design](docs/aws-deployment-design.md): target AWS shape, decisions, release and rollback, and known gaps before a first apply.
+- [AWS deployment runbook](docs/aws-deployment-runbook.md): prerequisites, image publishing, migrations, deployed smoke checks, and teardown for a first short-lived deployment.
+- [Terraform scaffold](infra/terraform/README.md): resources, variables, validation commands, and the `DATABASE_URL` secret format.
 
 ## Screenshots
 
@@ -92,74 +87,9 @@ The smoke capture shows real `smoke:local` output against the Docker Compose sta
 
 ## AWS Terraform Status
 
-The Terraform scaffold in `infra/terraform` implements ECR, security groups,
-the MVP HTTP ALB path, a private RDS PostgreSQL instance, private ElastiCache
-Redis, ECS Fargate task definitions, an ECS cluster, API and worker ECS
-services, task log groups, the minimal ECS task execution role, and a
-configurable private VPC endpoint egress path for ECR image pulls, CloudWatch
-Logs, Secrets Manager runtime secrets, and S3-backed ECR layer access. It does
-not define autoscaling, deployment workflows, NAT gateways, or live deployment
-behavior.
+`infra/terraform` defines ECR, security groups, an HTTP ALB, private RDS PostgreSQL, private ElastiCache Redis, ECS Fargate task definitions and services for the API and worker, a one-off migration task definition, task log groups, the task execution role, Secrets Manager placeholders for runtime secrets, and VPC endpoints for private egress. CI runs `terraform fmt -check` and `terraform validate`; the scaffold has never been applied, and no image, secret value, or remote state exists.
 
-The scaffold is for review and validation only. Do not run Terraform `plan`,
-`apply`, or `destroy` against live AWS without explicit approval.
-Review [AWS deploy guardrails](docs/aws-deploy-guardrails.md) before any live
-AWS usage; budgets, billing notifications, region choice, deployment
-prerequisites, and teardown ownership must be clear first.
-
-Terraform backend support is enabled with an empty `backend "s3" {}` block, but
-no remote backend was initialized here. Local scaffold validation remains
-`terraform init -backend=false`; no state bucket or lock table was created by
-this phase, and no live Terraform command was run. A future remote backend
-should use an approved S3 state bucket with encryption and an approved locking
-mechanism, with backend values supplied through an ignored
-`infra/terraform/backend.hcl` file or an explicitly approved command.
-Terraform state files and real backend values must not be committed.
-
-The ECR image publishing path is documented but not executed. No image has
-been published to ECR, no registry authentication is configured, and no deploy
-workflow exists. Current CI only verifies the production image locally with
-`docker build -t transaction-event-gateway:ci .`. A future deployment must use
-an approved immutable tag or digest, never `latest`, and pass that approved
-reference to Terraform through `container_image`.
-
-The one-off ECS migration task flow is documented but not executed. The
-Terraform scaffold defines a migration task definition that uses the same
-approved image as the API and worker task definitions, runs
-`npm run migration:run:prod`, and receives only `DATABASE_URL` as a secret.
-No migration task has been run, and no task runner or deploy workflow exists.
-
-The deployed smoke test flow is documented but not executed. It remains a
-future approval-gated manual check after approved apply, image publication,
-secret population, private egress, migration success, and API/worker rollout.
-No deployed API base URL verification has occurred, and no live AWS smoke run
-has occurred.
-
-The short-lived deploy runbook is documented but not executed. It ties the
-guardrails, backend/state decision, private egress inputs, secret population,
-image approval, migration gate, API/worker rollout gate, deployed smoke gate,
-monitoring window, and teardown decision into one future approval-gated order.
-No short-lived AWS deploy has occurred.
-
-RDS master credentials are managed by RDS with
-`manage_master_user_password = true`; no database password value belongs in
-Terraform files or tfvars files. The ECS task definitions now reference
-Secrets Manager placeholders for `DATABASE_URL`, `REDIS_URL`, and
-`WEBHOOK_SECRET`, but Terraform does not create secret versions or store those
-values. A real deployment still needs approved secret population, with
-`DATABASE_URL` assembled from the RDS endpoint and AWS-managed master user
-secret outside git: the password must be percent-encoded, the connection must
-use TLS with the Amazon RDS CA bundle, and the managed password rotation needs
-a re-population plan (see [Terraform scaffold notes](infra/terraform/README.md)).
-The services run in private subnets with no public IPs; the
-Terraform scaffold defines the preferred VPC endpoint path, but a real
-deployment still needs approved VPC, subnet, and private route table inputs
-plus explicit apply approval before those endpoints exist. A NAT Gateway remains
-an explicit approval and cost-risk alternative, not the default path.
-
-Before production use, review deletion protection, backup retention, final
-snapshot behavior, Multi-AZ, storage sizing, Redis TLS/failover settings, and
-the approval-gated migration task flow.
+Some gaps must be closed before a first apply, such as a currently available RDS engine version, a migration step that runs before the services roll out, and a Redis parameter group with `noeviction`. They are listed in [known gaps before the first apply](docs/aws-deployment-design.md#known-gaps-before-the-first-apply); the procedure for a short-lived deployment is in the [AWS deployment runbook](docs/aws-deployment-runbook.md).
 
 ## Prerequisites
 
@@ -388,7 +318,6 @@ Operational troubleshooting notes are in `docs/runbook.md`.
 - Swagger UI and OpenAPI JSON are exposed at `/docs` and `/docs/openapi.json` for the implemented API surface.
 - The smoke script exercises the full local path from health and OpenAPI through idempotency, signed webhook acceptance, outbox publication, worker processing, and final database state.
 - `docs/runbook.md` contains local inspection queries for payment intents, webhook events, outbox rows, and processing attempts.
-- `docs/aws-smoke-test-flow.md` documents the separate future deployed smoke flow; it is not a local smoke script and has not been run against AWS.
 - Metrics dashboards, alerting, distributed tracing, and dead-letter inspection workflows are deferred.
 
 ## Testing and Verification
@@ -434,7 +363,7 @@ Then run:
 npm run smoke:local
 ```
 
-The smoke script checks health, OpenAPI, payment intent idempotency, signed webhook acceptance, duplicate webhook handling, signature and timestamp rejection, outbox publication, worker processing, and final PostgreSQL state. Set `SMOKE_BASE_URL` only for approved local or non-AWS test targets. Future deployed AWS smoke testing is documented separately in `docs/aws-smoke-test-flow.md` and must stay approval-gated.
+The smoke script checks health, OpenAPI, payment intent idempotency, signed webhook acceptance, duplicate webhook handling, signature and timestamp rejection, outbox publication, worker processing, and final PostgreSQL state. It reads PostgreSQL and Redis through the local Compose containers, so `SMOKE_BASE_URL` can point it at another local API but not at a deployed one; deployed checks are in the [AWS deployment runbook](docs/aws-deployment-runbook.md).
 
 ## Failure Modes
 
@@ -445,7 +374,7 @@ The smoke script checks health, OpenAPI, payment intent idempotency, signed webh
 - **Duplicate webhook**: same provider event ID and same payload returns `202 ALREADY_ACCEPTED`.
 - **Nonce replay**: reused nonce for a different event returns `409 WEBHOOK_NONCE_REPLAY`.
 - **Redis unavailable**: payment intent creation and webhook acceptance can still persist durable state; `/health/ready` returns unavailable, `/health/serving` can remain healthy when configuration and PostgreSQL are healthy, and dispatching/worker processing waits and retries.
-- **PostgreSQL unavailable**: durable API operations return `503 SERVICE_UNAVAILABLE`.
+- **PostgreSQL unreachable**: when connections are refused or dropped, durable API operations return `503 SERVICE_UNAVAILABLE`. A PostgreSQL that accepts connections but stops answering is not detected quickly; see [known limitations](docs/failure-modes.md#known-limitations).
 - **Queue publish failure**: the outbox row remains `FAILED` and retryable with attempts, sanitized error text, capped backoff metadata, and no `dead_at` for transient failures.
 - **Worker crash or retry**: PostgreSQL rollback and BullMQ retry preserve correctness; already processed events complete safely.
 - **Unknown payment intent**: worker marks the webhook event `FAILED` with `UNKNOWN_PAYMENT_INTENT`.
@@ -457,12 +386,7 @@ MVP backend functionality is implemented locally: payment intent creation, idemp
 
 Manual retry endpoint, metrics dashboards, authentication, authorization, and real provider integrations are intentional future extensions.
 
-The AWS Terraform scaffold is implemented for structure review and validation,
-and the ECR image publishing path, one-off ECS migration task flow, and deployed
-smoke test flow are now documented. Terraform backend support is enabled with
-an empty S3 backend block, but no remote backend initialization, image
-publication, one-off migration run, deployed smoke test, secret value
-population, Terraform apply, or live deployment has been completed.
+The AWS Terraform scaffold is validated in CI but has never been applied; see [AWS Terraform Status](#aws-terraform-status).
 
 ## MVP Boundaries
 
@@ -470,12 +394,7 @@ This MVP does not provide custody, private key storage, wallet functionality, si
 
 Public endpoints enforce a request body size limit and process-local, in-memory rate limiting based on the request source observed by Nest/Express. Local or direct deployments use the request IP; behind ALB/proxy, the observed source may be the ALB/proxy or another shared source. The current MVP does not implement trust proxy / `X-Forwarded-For` handling or a distributed/shared limiter, so accurate per-client IP limiting across ECS tasks is a production traffic prerequisite or known limitation. A retention or cleanup job for the durable tables is also deferred: the tables grow until a future retention policy is added. `idempotency_records.expires_at` is populated so that future cleanup has data to act on, but no cleanup runs yet.
 
-Terraform currently defines an infrastructure skeleton only. Real deployment
-still requires approved backend configuration and state ownership, approved
-secret value population, approved VPC/subnet/private route table inputs for the
-private endpoint path, execution of the documented ECR image publishing path,
-explicit approval for the documented one-off ECS migration task flow, cost and
-durability review, and explicit approval before any live AWS operation.
+Terraform defines the infrastructure but no deployment pipeline: images, secret values, remote state, and the migration run are manual steps described in the [AWS deployment runbook](docs/aws-deployment-runbook.md).
 
 ## Repository Layout
 
@@ -489,19 +408,17 @@ durability review, and explicit approval before any live AWS operation.
   docs/
     api.md
     architecture.md
-    aws-deploy-guardrails.md
     aws-deployment-design.md
-    aws-migration-task-flow.md
-    aws-smoke-test-flow.md
+    aws-deployment-runbook.md
     database.md
-    ecr-image-publishing.md
+    domain-state-machine.md
     failure-modes.md
-    implementation-plan.md
     runbook.md
     testing.md
   infra/terraform/
   migrations/
   scripts/
+    check-schema-drift.sh
     smoke-local.sh
   src/
     common/

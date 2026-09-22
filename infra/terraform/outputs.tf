@@ -1,10 +1,10 @@
 output "name_prefix" {
-  description = "Name prefix planned for future AWS resources."
+  description = "Name prefix of the AWS resources, <project_name>-<environment>."
   value       = local.name_prefix
 }
 
 output "aws_region" {
-  description = "AWS region selected for future deployment work."
+  description = "AWS region of the deployment."
   value       = var.aws_region
 }
 
@@ -19,7 +19,7 @@ output "ecr_repository_name" {
 }
 
 output "ecr_repository_url" {
-  description = "Repository URL for pushing application images after an approved deployment phase."
+  description = "Repository URL for pushing application images."
   value       = aws_ecr_repository.app.repository_url
 }
 
@@ -29,12 +29,12 @@ output "ecr_repository_arn" {
 }
 
 output "alb_security_group_id" {
-  description = "ID of the security group intended for the future public ALB."
+  description = "ID of the security group of the public ALB."
   value       = aws_security_group.alb.id
 }
 
 output "ecs_tasks_security_group_id" {
-  description = "ID of the security group intended for future ECS API and worker tasks."
+  description = "ID of the security group shared by the ECS API, worker, and migration tasks."
   value       = aws_security_group.ecs_tasks.id
 }
 
@@ -56,13 +56,18 @@ output "private_egress_interface_endpoint_ids" {
 }
 
 output "rds_security_group_id" {
-  description = "ID of the security group intended for the future RDS PostgreSQL instance."
+  description = "ID of the security group of the RDS PostgreSQL instance."
   value       = aws_security_group.rds.id
 }
 
 output "postgres_endpoint" {
-  description = "Connection endpoint for the private PostgreSQL RDS instance."
+  description = "Connection endpoint of the private PostgreSQL RDS instance in host:port form."
   value       = aws_db_instance.postgres.endpoint
+}
+
+output "postgres_address" {
+  description = "Hostname of the private PostgreSQL RDS instance, without the port."
+  value       = aws_db_instance.postgres.address
 }
 
 output "postgres_port" {
@@ -87,7 +92,7 @@ output "postgres_master_user_secret_arn" {
 }
 
 output "redis_security_group_id" {
-  description = "ID of the security group intended for the ElastiCache Redis replication group."
+  description = "ID of the security group of the ElastiCache Redis replication group."
   value       = aws_security_group.redis.id
 }
 
@@ -107,22 +112,22 @@ output "redis_replication_group_id" {
 }
 
 output "alb_dns_name" {
-  description = "DNS name of the future public API Application Load Balancer."
+  description = "DNS name of the public API Application Load Balancer."
   value       = aws_lb.api.dns_name
 }
 
 output "alb_arn" {
-  description = "ARN of the future public API Application Load Balancer."
+  description = "ARN of the public API Application Load Balancer."
   value       = aws_lb.api.arn
 }
 
 output "alb_target_group_arn" {
-  description = "ARN of the HTTP target group intended for future ECS API tasks."
+  description = "ARN of the HTTP target group for the ECS API tasks."
   value       = aws_lb_target_group.api.arn
 }
 
 output "alb_listener_arn" {
-  description = "ARN of the MVP HTTP listener for the future API ALB."
+  description = "ARN of the HTTP listener of the API Application Load Balancer."
   value       = aws_lb_listener.http.arn
 }
 

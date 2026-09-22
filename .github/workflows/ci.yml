@@ -99,39 +99,37 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev
 
-      - name: Forbidden wording scan
+      - name: Content policy check
         shell: bash
+        env:
+          CONTENT_POLICY_PATTERN: ${{ secrets.CONTENT_POLICY_PATTERN }}
         run: |
           set -euo pipefail
 
-          blocked_terms=(
-            "inter""view"
-            "port""folio"
-            "pet ""project"
-            "tuto""rial"
-            "Async""Assassin"
-            "com""pany"
-          )
-          pattern="$(IFS='|'; echo "${blocked_terms[*]}")"
-          targets=(
-            README.md
-            docs
-            src
-            test
-            package.json
-            Dockerfile
-            docker-compose.yml
-            .env.example
-          )
-
-          if command -v rg >/dev/null 2>&1; then
-            if rg -n -i --glob '!node_modules/**' --glob '!dist/**' --glob '!coverage/**' "$pattern" "${targets[@]}"; then
-              echo "Forbidden wording found."
-              exit 1
-            fi
-          else
-            if grep -RInEI --binary-files=without-match "$pattern" "${targets[@]}"; then
-              echo "Forbidden wording found."
-              exit 1
-            fi
+          # Secrets are not passed to Dependabot runs or to pull requests from
+          # forks, so the check is skipped there instead of failing.
+          if [[ -z "${CONTENT_POLICY_PATTERN}" ]]; then
+            echo "::notice::Content policy pattern is not available to this run; skipping the check."
+            exit 0
           fi
+
+          set +e
+          matches="$(git grep -nIiE -e "${CONTENT_POLICY_PATTERN}" -- \
+            README.md docs src test scripts infra migrations \
+            package.json Dockerfile docker-compose.yml .env.example)"
+          status=$?
+          set -e
+
+          if [[ ${status} -eq 0 ]]; then
+            # Print locations only, so matched text never reaches public logs.
+            cut -d: -f1,2 <<<"${matches}"
+            echo "Content policy check failed."
+            exit 1
+          fi
+
+          if [[ ${status} -ne 1 ]]; then
+            echo "Content policy check could not run (git grep exited with ${status})."
+            exit "${status}"
+          fi
+
+          echo "Content policy check passed."
