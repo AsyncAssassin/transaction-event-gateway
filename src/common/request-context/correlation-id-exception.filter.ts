@@ -10,6 +10,7 @@ import { Request, Response } from 'express';
 import { isDatabaseUnavailableError } from '../errors/database-error';
 import { sanitizeErrorMessage } from '../errors/sanitize-error';
 import {
+  isSafeErrorCode,
   StructuredLogger,
   toSafeErrorCode,
 } from '../logging/structured-logger';
@@ -39,7 +40,7 @@ export class CorrelationIdExceptionFilter implements ExceptionFilter {
       logger.error('http_request_failed', {
         correlationId,
         status,
-        errorCode: toSafeErrorCode(exception, 'INTERNAL_SERVER_ERROR'),
+        errorCode: resolveLogErrorCode(exception, body),
       });
     }
 
@@ -97,6 +98,20 @@ export class CorrelationIdExceptionFilter implements ExceptionFilter {
       },
     };
   }
+}
+
+// Prefer a stable code carried by the exception itself; otherwise log the
+// classified code the client receives (for example SERVICE_UNAVAILABLE for a
+// datastore outage) instead of a generic INTERNAL_SERVER_ERROR.
+function resolveLogErrorCode(
+  exception: unknown,
+  body: Record<string, unknown>,
+): string {
+  const classifiedCode = isSafeErrorCode(body.error)
+    ? body.error
+    : 'INTERNAL_SERVER_ERROR';
+
+  return toSafeErrorCode(exception, classifiedCode);
 }
 
 function resolveCorrelationId(request: Request, response: Response): string {
