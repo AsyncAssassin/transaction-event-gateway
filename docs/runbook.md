@@ -94,7 +94,7 @@ docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SEL
 Outbox statuses:
 
 - `PENDING`: accepted webhook work is durable but has not been published to BullMQ yet.
-- `PUBLISHED`: dispatcher published the BullMQ job and marked the outbox row complete.
+- `PUBLISHED`: dispatcher published the BullMQ job and marked the outbox row complete. If the webhook event is still unfinished 10 minutes later, the worker sets the row back to `FAILED` with `last_error = 'STALE_PUBLISHED_WEBHOOK_REQUEUED'` so that it is published again.
 - `FAILED`: dispatcher attempted publication and stored retry metadata. A transient failure remains eligible for later dispatch when `dead_at` is null.
 
 Retry metadata:
@@ -125,7 +125,7 @@ If outbox rows are stuck:
 - Confirm Redis is reachable from the worker.
 - Check `next_attempt_at` for failed rows that are waiting for backoff.
 - Check `attempts`, `next_attempt_at`, and `last_error` to distinguish active capped-backoff retry from a quiet dispatcher.
-- Check worker logs for `outbox_dispatch_failed`, `outbox_dispatch_poisoned`, `webhook_events_queue_poisoned`, or `outbox_dispatch_runner_failed`.
+- Check worker logs for `outbox_dispatch_failed`, `outbox_dispatch_poisoned`, `webhook_events_queue_poisoned`, `outbox_dispatch_runner_failed`, or `outbox_reconcile_failed`.
 - Repeated Redis connection errors are summarized, not streamed: `worker_error` and `webhook_events_queue_poisoned` appear once per error code per 30 seconds with a `suppressedCount`, and `worker_redis_recovered` or `webhook_events_queue_recovered` marks the end of the outage.
 - Remember webhook acceptance writes `webhook_events` and `outbox_events`; it does not publish directly to BullMQ.
 
@@ -144,9 +144,9 @@ Worker jobs contain only `webhookEventId`, so the worker reloads durable state f
 `PROCESSING` is only set inside the worker transaction, which always ends in `PROCESSED` or `FAILED` or rolls back, so a webhook event that does not finish stays `QUEUED`. If it stays `QUEUED`:
 
 - Check that Redis is reachable and the worker process is consuming jobs.
-- Inspect worker logs by `webhookEventId`. Each failed attempt logs `worker_job_failed`; after the fifth, BullMQ gives up. A crashed attempt is retried once its job lock expires.
+- Inspect worker logs by `webhookEventId`. Each failed attempt logs `worker_job_failed`; after the fifth, BullMQ gives up and the worker logs `worker_job_exhausted`. A crashed attempt is retried once its job lock expires.
 - A rolled-back attempt leaves no `webhook_processing_attempts` row, so missing attempt rows do not mean the job never ran.
-- If the job is gone from Redis or has failed all attempts, re-drive the event as described below.
+- The worker reconciles such events on its own: once the outbox row has been `PUBLISHED` for 10 minutes, the next run (every 60 seconds) logs `outbox_reconcile_requeued` and the dispatcher publishes a new job. To recover sooner, or while the dispatcher is disabled, re-drive the event as described below.
 
 ### Re-drive a stuck webhook event
 
@@ -156,7 +156,7 @@ List webhook events whose outbox row was published more than 10 minutes ago but 
 docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT w.id, w.external_event_id, w.status, o.published_at FROM webhook_events w JOIN outbox_events o ON o.aggregate_type = 'webhook_event' AND o.aggregate_id = w.id WHERE w.status IN ('RECEIVED', 'QUEUED') AND o.status = 'PUBLISHED' AND o.published_at < now() - interval '10 minutes' ORDER BY o.published_at;"
 ```
 
-Hand them back to the dispatcher, which republishes them within a second. Add `AND w.id = '<webhook_event_id>'` to re-drive a single event. A duplicate job is harmless: the worker locks the webhook row and skips events that are already `PROCESSED`.
+Hand them back to the dispatcher, which republishes them within a second; this is the same change the automatic reconciliation makes, and the 10-minute condition can be dropped to act at once. Add `AND w.id = '<webhook_event_id>'` to re-drive a single event. A duplicate job is harmless: the worker locks the webhook row and skips events that are already `PROCESSED`.
 
 ```bash
 docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "UPDATE outbox_events o SET status = 'FAILED', next_attempt_at = now(), last_error = 'MANUAL_REDRIVE', updated_at = now() FROM webhook_events w WHERE o.aggregate_type = 'webhook_event' AND o.aggregate_id = w.id AND o.status = 'PUBLISHED' AND w.status IN ('RECEIVED', 'QUEUED') AND o.published_at < now() - interval '10 minutes';"
@@ -186,7 +186,7 @@ docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "UPD
 - `/health/serving` can remain healthy when configuration and PostgreSQL are healthy; this is the load balancer target.
 - Payment intent creation and webhook acceptance are PostgreSQL-backed for correctness.
 - Transient outbox publish failures remain `FAILED` with `dead_at` unset, capped `next_attempt_at`, sanitized `last_error`, and increasing `attempts`; retries continue indefinitely while Redis or BullMQ is unavailable.
-- After Redis returns, the worker dispatcher should resume publishing eligible outbox rows and BullMQ processing should continue.
+- After Redis returns, the worker dispatcher resumes publishing eligible outbox rows and BullMQ processing continues. If Redis lost its data, reconciliation re-queues the affected webhook events 10 minutes after their publication.
 
 ## PostgreSQL Unavailable
 

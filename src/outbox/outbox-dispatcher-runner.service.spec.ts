@@ -1,13 +1,18 @@
 import { ConfigService } from '@nestjs/config';
 
+import { StructuredLogger } from '../common/logging/structured-logger';
 import {
   OutboxDispatchBatchResult,
   OutboxDispatcherService,
+  OutboxReconcileResult,
 } from './outbox-dispatcher.service';
 import { OutboxDispatcherRunnerService } from './outbox-dispatcher-runner.service';
 
 describe('OutboxDispatcherRunnerService', () => {
-  let dispatcher: Pick<OutboxDispatcherService, 'dispatchBatch'>;
+  let dispatcher: Pick<
+    OutboxDispatcherService,
+    'dispatchBatch' | 'reconcileStalePublishedEvents'
+  >;
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -21,6 +26,9 @@ describe('OutboxDispatcherRunnerService', () => {
           published: 0,
           failed: 0,
         }),
+      reconcileStalePublishedEvents: jest
+        .fn<Promise<OutboxReconcileResult>, []>()
+        .mockResolvedValue({ requeued: 0 }),
     };
   });
 
@@ -116,6 +124,92 @@ describe('OutboxDispatcherRunnerService', () => {
     await runner.onApplicationShutdown();
 
     expect(dispatcher.dispatchBatch).toHaveBeenCalledTimes(6);
+  });
+
+  it('reconciles stale published outbox rows once a minute', async () => {
+    const runner = createRunner({
+      OUTBOX_DISPATCH_ENABLED: true,
+      OUTBOX_DISPATCH_INTERVAL_MS: 10,
+    });
+
+    runner.onApplicationBootstrap();
+    await jest.advanceTimersByTimeAsync(59_999);
+    expect(dispatcher.reconcileStalePublishedEvents).not.toHaveBeenCalled();
+
+    await jest.advanceTimersByTimeAsync(1);
+    expect(dispatcher.reconcileStalePublishedEvents).toHaveBeenCalledTimes(1);
+    expect(dispatcher.reconcileStalePublishedEvents).toHaveBeenCalledWith();
+
+    await jest.advanceTimersByTimeAsync(60_000);
+    await runner.onApplicationShutdown();
+
+    expect(dispatcher.reconcileStalePublishedEvents).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reconcile when disabled', async () => {
+    const runner = createRunner({
+      OUTBOX_DISPATCH_ENABLED: false,
+      OUTBOX_DISPATCH_INTERVAL_MS: 10,
+    });
+
+    runner.onApplicationBootstrap();
+    await jest.advanceTimersByTimeAsync(180_000);
+    await runner.onApplicationShutdown();
+
+    expect(dispatcher.reconcileStalePublishedEvents).not.toHaveBeenCalled();
+  });
+
+  it('logs a failed reconcile run and tries again on the next interval', async () => {
+    const warnSpy = jest
+      .spyOn(StructuredLogger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    (dispatcher.reconcileStalePublishedEvents as jest.Mock)
+      .mockRejectedValueOnce(new Error('DB_DOWN'))
+      .mockResolvedValue({ requeued: 1 });
+    const runner = createRunner({
+      OUTBOX_DISPATCH_ENABLED: true,
+      OUTBOX_DISPATCH_INTERVAL_MS: 10,
+    });
+
+    runner.onApplicationBootstrap();
+    await jest.advanceTimersByTimeAsync(120_000);
+    await runner.onApplicationShutdown();
+
+    expect(dispatcher.reconcileStalePublishedEvents).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith('outbox_reconcile_failed', {
+      status: 'FAILED',
+      errorCode: 'DB_DOWN',
+    });
+  });
+
+  it('skips a reconcile tick while the previous run is still in flight and waits for it on shutdown', async () => {
+    let finishReconcile: (value: OutboxReconcileResult) => void = () =>
+      undefined;
+    (dispatcher.reconcileStalePublishedEvents as jest.Mock).mockReturnValue(
+      new Promise<OutboxReconcileResult>((resolve) => {
+        finishReconcile = resolve;
+      }),
+    );
+    const runner = createRunner({
+      OUTBOX_DISPATCH_ENABLED: true,
+      OUTBOX_DISPATCH_INTERVAL_MS: 10,
+    });
+
+    runner.onApplicationBootstrap();
+    await jest.advanceTimersByTimeAsync(180_000);
+    expect(dispatcher.reconcileStalePublishedEvents).toHaveBeenCalledTimes(1);
+
+    let shutdownFinished = false;
+    const shutdown = runner.onApplicationShutdown().then(() => {
+      shutdownFinished = true;
+    });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(shutdownFinished).toBe(false);
+
+    finishReconcile({ requeued: 0 });
+    await shutdown;
+    expect(shutdownFinished).toBe(true);
   });
 
   function createRunner(

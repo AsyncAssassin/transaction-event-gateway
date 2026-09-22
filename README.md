@@ -295,6 +295,8 @@ The worker process starts the dispatcher runner and the BullMQ consumer. The dis
 
 Transient Redis, BullMQ, or publisher failures leave the accepted webhook durable in PostgreSQL. The outbox row becomes or remains `FAILED` with incremented `attempts`, sanitized `last_error`, capped `next_attempt_at`, and `dead_at = null`; the dispatcher retries indefinitely while the dependency is unavailable. Deterministic poison payloads, such as a missing or non-string `webhookEventId`, are non-retryable and are marked `FAILED` with `dead_at` set. If the BullMQ `Queue` object is poisoned, the publisher recreates it and retries the publish once before returning a transient failure to the outbox.
 
+A published job can still be lost, for example with Redis data or after all five BullMQ attempts fail during a PostgreSQL outage. Every 60 seconds the worker hands outbox rows that were published more than 10 minutes ago, and whose webhook event has not finished, back to the dispatcher, which publishes them again; see [failure modes](docs/failure-modes.md#webhook-job-lost-or-retries-exhausted).
+
 Dispatcher behavior is controlled by `OUTBOX_DISPATCH_ENABLED` and `OUTBOX_DISPATCH_INTERVAL_MS`. Jobs contain only `webhookEventId`, so duplicate publication or duplicate delivery is safe: the worker reloads the durable webhook event, locks rows in PostgreSQL, checks current status, and records processing attempts.
 
 Operational troubleshooting notes are in `docs/runbook.md`.
@@ -377,6 +379,7 @@ The smoke script checks health, OpenAPI, payment intent idempotency, signed webh
 - **PostgreSQL unreachable**: when connections are refused or dropped, durable API operations return `503 SERVICE_UNAVAILABLE`. A PostgreSQL that accepts connections but stops answering is not detected quickly; see [known limitations](docs/failure-modes.md#known-limitations).
 - **Queue publish failure**: the outbox row remains `FAILED` and retryable with attempts, sanitized error text, capped backoff metadata, and no `dead_at` for transient failures.
 - **Worker crash or retry**: PostgreSQL rollback and BullMQ retry preserve correctness; already processed events complete safely.
+- **Lost or exhausted job**: a webhook event still `QUEUED` 10 minutes after its job was published is published again by the worker's outbox reconciliation.
 - **Unknown payment intent**: worker marks the webhook event `FAILED` with `UNKNOWN_PAYMENT_INTENT`.
 - **Mismatch failures**: amount, asset, terminal-state, or confirmed transaction hash conflicts fail the webhook without corrupting payment intent state.
 

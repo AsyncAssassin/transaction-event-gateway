@@ -2,7 +2,7 @@
 
 ## Overview
 
-PostgreSQL is authoritative; Redis holds only BullMQ queue state. Durable state, database constraints, transactions, and worker idempotency provide correctness under retries and partial failures. Behavior that is not covered yet is listed under [Known Limitations](#known-limitations).
+PostgreSQL is authoritative; Redis holds only BullMQ queue state, so losing it delays processing until reconciliation but never loses an accepted webhook. Durable state, database constraints, transactions, and worker idempotency provide correctness under retries and partial failures. Behavior that is not covered yet is listed under [Known Limitations](#known-limitations).
 
 ## Duplicate Payment Intent Request
 
@@ -117,6 +117,22 @@ Protection:
 - BullMQ jobs contain durable IDs only.
 - Worker locks and checks `webhook_events.status`.
 
+## Webhook Job Lost or Retries Exhausted
+
+Scenario: The dispatcher published a job for an accepted webhook, but the job disappears from Redis (a flush, a failover without persistence, eviction under a policy other than `noeviction`), or it fails all five BullMQ attempts, for example because PostgreSQL is unavailable for more than about 75 seconds while it is processed.
+
+Expected behavior:
+
+- The worker transaction rolls back on every failed attempt, so the webhook event stays `QUEUED` and the payment intent unchanged. After the fifth failed attempt the worker logs `worker_job_exhausted`.
+- Every 60 seconds the worker hands outbox rows that were `PUBLISHED` more than 10 minutes ago, and whose webhook event is still `RECEIVED` or `QUEUED`, back to the dispatcher: the row becomes `FAILED` with `next_attempt_at = now()` and `last_error = 'STALE_PUBLISHED_WEBHOOK_REQUEUED'`, and `outbox_reconcile_requeued` is logged with the `webhookEventId`.
+- The dispatcher publishes a new job within a second, and the event is processed 10 to 11 minutes after its last publication.
+- A repeated delivery from the provider is answered with `ALREADY_ACCEPTED` and does not speed this up; to recover immediately, re-drive the event with SQL (see [Re-drive a stuck webhook event](runbook.md#re-drive-a-stuck-webhook-event)).
+
+Protection:
+
+- Reconciliation runs as one `UPDATE ... FROM` over at most 100 rows with `FOR UPDATE SKIP LOCKED`, so several worker processes can run it at once and webhook events that a worker is processing right now are skipped.
+- A duplicate job is harmless: the worker locks the webhook row and skips events that are already `PROCESSED`.
+
 ## Redis Unavailable
 
 Scenario: Redis is unavailable for BullMQ.
@@ -133,7 +149,7 @@ Expected behavior:
 Protection:
 
 - Correctness does not depend on Redis TTLs, in-memory locks, or queue uniqueness.
-- Pending outbox rows preserve work.
+- Pending outbox rows preserve work, and reconciliation re-queues jobs that were lost with Redis data.
 
 ## Rate Limit Source Behind ALB/Proxy
 
@@ -224,9 +240,9 @@ Protection:
 
 ## Known Limitations
 
-### Accepted Webhook Stuck in `QUEUED`
+### Slow Recovery of Lost Jobs
 
-After the dispatcher publishes a job, the outbox row is `PUBLISHED` and the BullMQ job is the only record of pending work. If Redis loses the job (a flush, a failover without persistence, eviction under a policy other than `noeviction`) or the job fails all five attempts (for example when PostgreSQL is unavailable for more than about 75 seconds while it is processed), the webhook event stays `QUEUED` and the payment intent stays `CREATED`. A repeated delivery from the provider is answered with `ALREADY_ACCEPTED` and does not change that. Re-drive such events with SQL; see [Re-drive a stuck webhook event](runbook.md#re-drive-a-stuck-webhook-event).
+Reconciliation waits 10 minutes after publication, so a lost or exhausted job delays its payment confirmation by 10 to 11 minutes unless an operator re-drives it. A job that is only waiting in a backlog for longer than that gets one duplicate every 10 minutes; duplicates are harmless but add load. An event whose processing throws on every attempt, which is a bug rather than a domain failure, is retried every 10 minutes indefinitely and shows up as repeated `worker_job_exhausted` and `outbox_reconcile_requeued` lines for the same `webhookEventId`.
 
 ### PostgreSQL That Stops Answering
 

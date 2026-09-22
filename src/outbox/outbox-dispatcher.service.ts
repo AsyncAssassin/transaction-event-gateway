@@ -13,17 +13,30 @@ import {
   WebhookEventStatus,
 } from '../database/entities';
 import { WebhookEventJobPublisher } from '../processing/webhook-event-job-publisher.service';
-import { PROCESS_WEBHOOK_OUTBOX_TYPE } from '../webhooks/webhooks.types';
+import {
+  PROCESS_WEBHOOK_OUTBOX_TYPE,
+  WEBHOOK_OUTBOX_AGGREGATE_TYPE,
+} from '../webhooks/webhooks.types';
 
 const DEFAULT_OUTBOX_DISPATCH_BATCH_SIZE = 50;
 const OUTBOX_RETRY_BASE_DELAY_MS = 5_000;
 const OUTBOX_RETRY_MAX_DELAY_MS = 5 * 60_000;
 const INVALID_OUTBOX_PAYLOAD = 'INVALID_OUTBOX_PAYLOAD';
 
+// Well above the ~75 s a job needs to exhaust its BullMQ attempts, so a job
+// that is still retrying is not republished.
+export const DEFAULT_STALE_PUBLISHED_AFTER_MS = 10 * 60_000;
+const DEFAULT_OUTBOX_RECONCILE_BATCH_SIZE = 100;
+const STALE_PUBLISHED_WEBHOOK_REQUEUED = 'STALE_PUBLISHED_WEBHOOK_REQUEUED';
+
 export type OutboxDispatchBatchResult = {
   selected: number;
   published: number;
   failed: number;
+};
+
+export type OutboxReconcileResult = {
+  requeued: number;
 };
 
 @Injectable()
@@ -92,6 +105,69 @@ export class OutboxDispatcherService {
 
       return result;
     });
+  }
+
+  // After a successful publish the BullMQ job is the only record of pending
+  // work. If Redis loses the job, or the job exhausts its attempts (for example
+  // during a PostgreSQL outage), the webhook event stays QUEUED behind a
+  // PUBLISHED outbox row that the dispatcher never selects again. Hand such
+  // rows back to the dispatcher; a duplicate job is harmless because the worker
+  // locks the webhook event and skips it once it is PROCESSED. SKIP LOCKED
+  // makes concurrent runs from several worker processes safe and also skips
+  // webhook events a worker is processing right now.
+  async reconcileStalePublishedEvents(
+    olderThanMs = DEFAULT_STALE_PUBLISHED_AFTER_MS,
+    limit = DEFAULT_OUTBOX_RECONCILE_BATCH_SIZE,
+  ): Promise<OutboxReconcileResult> {
+    const [rows] = (await this.dataSource.query(
+      `
+        WITH stale AS (
+          SELECT outbox.id
+          FROM webhook_events webhook
+          JOIN outbox_events outbox
+            ON outbox.aggregate_type = $1
+            AND outbox.aggregate_id = webhook.id
+          WHERE webhook.status IN ($2, $3)
+            AND outbox.type = $4
+            AND outbox.status = $5
+            AND outbox.dead_at IS NULL
+            AND outbox.published_at < now() - $6::double precision * interval '1 millisecond'
+          ORDER BY outbox.published_at
+          LIMIT $7
+          FOR UPDATE OF outbox, webhook SKIP LOCKED
+        )
+        UPDATE outbox_events outbox
+        SET
+          status = $8,
+          next_attempt_at = now(),
+          last_error = $9,
+          updated_at = now()
+        FROM stale
+        WHERE outbox.id = stale.id
+        RETURNING outbox.aggregate_id AS "webhookEventId"
+      `,
+      [
+        WEBHOOK_OUTBOX_AGGREGATE_TYPE,
+        WebhookEventStatus.Received,
+        WebhookEventStatus.Queued,
+        PROCESS_WEBHOOK_OUTBOX_TYPE,
+        OutboxEventStatus.Published,
+        olderThanMs,
+        limit,
+        OutboxEventStatus.Failed,
+        STALE_PUBLISHED_WEBHOOK_REQUEUED,
+      ],
+    )) as [Array<{ webhookEventId: string }>, number];
+
+    for (const row of rows) {
+      this.logger.warn('outbox_reconcile_requeued', {
+        webhookEventId: row.webhookEventId,
+        status: OutboxEventStatus.Failed,
+        errorCode: STALE_PUBLISHED_WEBHOOK_REQUEUED,
+      });
+    }
+
+    return { requeued: rows.length };
   }
 
   private findEligibleEvents(

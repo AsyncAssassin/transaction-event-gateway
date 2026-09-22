@@ -2,6 +2,8 @@ import type { TestingModule } from '@nestjs/testing';
 import { randomUUID } from 'crypto';
 import type { DataSource } from 'typeorm';
 
+import type { OutboxDispatcherService } from '../src/outbox/outbox-dispatcher.service';
+
 // Exercises the automatic bridge accept -> outbox -> dispatcher runner -> BullMQ
 // -> worker, without directly calling dispatchBatch() or queue.add(). The rest
 // of the e2e suite keeps OUTBOX_DISPATCH_ENABLED=false. ConfigModule.forRoot()
@@ -11,6 +13,7 @@ import type { DataSource } from 'typeorm';
 describe('Outbox dispatcher runner (e2e)', () => {
   let moduleRef: TestingModule;
   let dataSource: DataSource;
+  let dispatcher: OutboxDispatcherService;
   let previousEnabled: string | undefined;
   let previousInterval: string | undefined;
 
@@ -24,6 +27,8 @@ describe('Outbox dispatcher runner (e2e)', () => {
     const { Test } = await import('@nestjs/testing');
     const { DataSource: DataSourceCtor } = await import('typeorm');
     const { WorkerModule } = await import('../src/processing/worker.module');
+    const { OutboxDispatcherService: OutboxDispatcherServiceCtor } =
+      await import('../src/outbox/outbox-dispatcher.service');
 
     moduleRef = await Test.createTestingModule({
       imports: [WorkerModule],
@@ -31,6 +36,7 @@ describe('Outbox dispatcher runner (e2e)', () => {
     await moduleRef.init();
 
     dataSource = moduleRef.get(DataSourceCtor);
+    dispatcher = moduleRef.get(OutboxDispatcherServiceCtor);
   });
 
   beforeEach(async () => {
@@ -96,6 +102,85 @@ describe('Outbox dispatcher runner (e2e)', () => {
       `,
       [randomUUID(), webhookEventId, JSON.stringify({ webhookEventId })],
     );
+
+    await waitFor(async () => {
+      const rows = (await dataSource.query(
+        `
+          SELECT pi.status AS "paymentStatus", we.status AS "webhookStatus", oe.status AS "outboxStatus"
+          FROM payment_intents pi
+          JOIN webhook_events we ON we.payment_intent_id = pi.id
+          JOIN outbox_events oe ON oe.aggregate_id = we.id
+          WHERE we.id = $1
+        `,
+        [webhookEventId],
+      )) as Array<{
+        paymentStatus: string;
+        webhookStatus: string;
+        outboxStatus: string;
+      }>;
+
+      expect(rows).toEqual([
+        {
+          paymentStatus: 'CONFIRMED',
+          webhookStatus: 'PROCESSED',
+          outboxStatus: 'PUBLISHED',
+        },
+      ]);
+    });
+  }, 20_000);
+
+  it('recovers a QUEUED webhook event whose BullMQ job was lost', async () => {
+    const paymentIntentId = randomUUID();
+    const webhookEventId = randomUUID();
+    const txHash = '0xrunner-reconcile';
+
+    await dataSource.query(
+      `
+        INSERT INTO payment_intents (id, status, amount, asset, destination, reference, metadata)
+        VALUES ($1, 'CREATED', '125.50', 'USDC', 'wallet_test_123', 'order-1002', '{}'::jsonb)
+      `,
+      [paymentIntentId],
+    );
+
+    await dataSource.query(
+      `
+        INSERT INTO webhook_events (
+          id, provider, external_event_id, nonce, event_type,
+          payment_intent_id, tx_hash, payload, payload_hash, status, received_at
+        )
+        VALUES ($1, 'blockchain', $2, $3, 'transaction.confirmed', $4, $5, $6::jsonb, $7, 'QUEUED', now())
+      `,
+      [
+        webhookEventId,
+        `evt_${webhookEventId}`,
+        `nonce_${webhookEventId}`,
+        paymentIntentId,
+        txHash,
+        JSON.stringify({
+          eventId: `evt_${webhookEventId}`,
+          type: 'transaction.confirmed',
+          paymentIntentId,
+          txHash,
+          amount: '125.50',
+          asset: 'USDC',
+        }),
+        `hash_${webhookEventId}`,
+      ],
+    );
+
+    // The outbox row says the job was published 11 minutes ago, but no job
+    // exists in Redis any more: the state a Redis data loss leaves behind.
+    await dataSource.query(
+      `
+        INSERT INTO outbox_events (id, type, aggregate_type, aggregate_id, payload, status, published_at)
+        VALUES ($1, 'process-webhook-event', 'webhook_event', $2, $3::jsonb, 'PUBLISHED', now() - interval '11 minutes')
+      `,
+      [randomUUID(), webhookEventId, JSON.stringify({ webhookEventId })],
+    );
+
+    await expect(dispatcher.reconcileStalePublishedEvents()).resolves.toEqual({
+      requeued: 1,
+    });
 
     await waitFor(async () => {
       const rows = (await dataSource.query(
