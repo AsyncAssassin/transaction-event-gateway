@@ -32,8 +32,14 @@ export class PostgresHealthCheckService implements OnModuleDestroy {
         `SET statement_timeout = ${POSTGRES_HEALTH_STATEMENT_TIMEOUT_MS}`,
       );
       await client.query('SELECT 1');
-    } finally {
       client.release();
+    } catch (error) {
+      // A query_timeout does not close the connection: the timed-out query
+      // stays active, so a client returned to the pool would fail every later
+      // check (for example after a silently dropped connection). Destroy it so
+      // the next check opens a fresh connection.
+      client.release(true);
+      throw error;
     }
   }
 

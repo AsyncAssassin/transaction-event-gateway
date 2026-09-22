@@ -20,7 +20,7 @@ describe('PostgresHealthCheckService', () => {
   let end: jest.Mock<Promise<void>, []>;
   let on: jest.Mock<void, [string, PoolErrorListener]>;
   let query: jest.Mock;
-  let release: jest.Mock<void, []>;
+  let release: jest.Mock<void, [boolean?]>;
   let service: PostgresHealthCheckService;
 
   beforeEach(() => {
@@ -90,17 +90,19 @@ describe('PostgresHealthCheckService', () => {
     expect(query).toHaveBeenNthCalledWith(2, 'SELECT 1');
   });
 
-  it('releases the health client after a successful check', async () => {
+  it('returns the health client to the pool after a successful check', async () => {
     await service.check();
 
     expect(release).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledWith();
   });
 
-  it('releases the health client after a failed check', async () => {
-    query.mockRejectedValueOnce(new Error('statement timeout failed'));
+  it('destroys the health client after a failed check instead of reusing it', async () => {
+    query.mockRejectedValueOnce(new Error('Query read timeout'));
 
-    await expect(service.check()).rejects.toThrow('statement timeout failed');
+    await expect(service.check()).rejects.toThrow('Query read timeout');
     expect(release).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledWith(true);
   });
 
   it('closes the health pool on module destroy', async () => {
