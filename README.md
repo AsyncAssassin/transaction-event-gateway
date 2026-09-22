@@ -86,7 +86,7 @@ The readiness capture shows the API process validating configuration, PostgreSQL
 
 ![Readiness endpoint](docs/assets/health-ready.png)
 
-The smoke capture shows a local webhook reaching processed webhook and published outbox state.
+The smoke capture shows real `smoke:local` output against the Docker Compose stack, followed by a database query confirming that the payment intent, webhook event, and outbox row reached `CONFIRMED`, `PROCESSED`, and `PUBLISHED`.
 
 ![Smoke outbox proof](docs/assets/smoke-outbox.png)
 
@@ -196,17 +196,28 @@ Install dependencies:
 npm install
 ```
 
+Create the local environment file; the API, worker, and migration commands read `.env` (variables set in the shell take precedence):
+
+```bash
+cp .env.example .env
+```
+
 Start local infrastructure:
 
 ```bash
 docker compose up -d postgres redis
 ```
 
-Run migrations:
+Run migrations and show their status:
 
 ```bash
 DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run migration:run
 DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run migration:show
+```
+
+Roll back the most recent migration only when you intend to undo it; the API and worker need the full schema, so run `migration:run` again before starting them:
+
+```bash
 DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run migration:revert
 ```
 
