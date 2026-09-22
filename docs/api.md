@@ -42,6 +42,17 @@ Use a stable error envelope:
 
 `details` is optional and lists field paths with constraint messages; it does not include secrets, webhook signatures, or raw payloads.
 
+## Request Body Rules
+
+Every endpoint parses JSON bodies up to 256 KB (`413 PAYLOAD_TOO_LARGE` above that) and urlencoded bodies up to 100 KB, then rejects with `400 VALIDATION_ERROR`, before routing and before the webhook signature check, a body that:
+
+- is nested deeper than 32 levels, counting objects and arrays, with the body itself as level 1;
+- contains a C0 control character other than tab, line feed, or carriage return, including NUL, in any key or string value;
+- contains an unpaired UTF-16 surrogate, for example the JSON escape `\ud800` without a low surrogate after it;
+- uses `__proto__`, `constructor`, `prototype`, or another `Object.prototype` member name, such as `toString`, as a key at any depth.
+
+If PostgreSQL still rejects a submitted value as invalid data (SQLSTATE class 22), the response is also `400 VALIDATION_ERROR`.
+
 ## POST /payment-intents
 
 Creates a payment intent idempotently.
@@ -126,7 +137,7 @@ Content-Type: application/json
 
 | Status | Error code | Case |
 | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Missing or oversized `Idempotency-Key`, invalid JSON, or DTO validation failure (including unknown properties) |
+| 400 | `VALIDATION_ERROR` | Missing or oversized `Idempotency-Key`, invalid JSON, a body that breaks the [request body rules](#request-body-rules), or DTO validation failure (including unknown properties) |
 | 409 | `IDEMPOTENCY_CONFLICT` | Same idempotency key was already used with a different logical request payload |
 | 413 | `PAYLOAD_TOO_LARGE` | Request body exceeds the configured size limit |
 | 503 | `SERVICE_UNAVAILABLE` | PostgreSQL is unavailable |
@@ -248,7 +259,7 @@ The payload is not persisted and no outbox event is created when signature valid
 
 | Status | Error code | Case |
 | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Missing required headers, invalid JSON, or invalid payload shape |
+| 400 | `VALIDATION_ERROR` | Missing required headers, invalid JSON, a body that breaks the [request body rules](#request-body-rules), or invalid payload shape |
 | 401 | `INVALID_WEBHOOK_SIGNATURE` | HMAC verification failed |
 | 400 | `STALE_WEBHOOK_TIMESTAMP` | Timestamp is outside the configured tolerance window |
 | 409 | `WEBHOOK_EVENT_CONFLICT` | Same provider event ID was seen with a different payload hash |

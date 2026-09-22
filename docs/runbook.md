@@ -227,7 +227,9 @@ If local Redis queue state is suspected, prefer restarting the local Redis conta
 
 - Send `X-Correlation-ID` on API calls to connect request logs, service logs, and error responses.
 - If the header is missing or invalid, the service generates a correlation ID and returns it in the response header.
-- Each application event is logged as a single-line JSON object inside the Nest console log line. Only allow-listed fields are written: `correlationId`, `requestId`, `paymentIntentId`, `webhookEventId`, `externalEventId`, `provider`, `jobId`, `status`, `errorCode`, `method`, `path`, `durationMs`, and `suppressedCount`.
+- Each application event is logged as a single-line JSON object inside the Nest console log line. Only allow-listed fields are written: `correlationId`, `requestId`, `paymentIntentId`, `webhookEventId`, `externalEventId`, `provider`, `jobId`, `status`, `errorCode`, `method`, `path`, `durationMs`, `suppressedCount`, `errorName`, `causeCode`, and `stackTop`.
+- `http_request_failed` (5xx responses) and the worker and dispatcher failure events (`worker_job_failed`, `worker_job_exhausted`, `outbox_dispatch_failed`, `outbox_dispatch_runner_failed`, `outbox_reconcile_failed`) add `errorName`, `causeCode` (an error code, SQLSTATE, or errno such as `ECONNREFUSED` or `22021`), and `stackTop` (the first three stack frames). The error message itself is never logged, because PostgreSQL messages can contain submitted values.
+- `http_request_data_exception` (warn) means PostgreSQL rejected a submitted value that request validation let through; the request got `400`, and `causeCode` holds the SQLSTATE.
 - Webhook secrets, signatures, raw request bodies, and payload fields are never logged.
 - The correlation ID covers one HTTP request: `http_request_completed`, `http_request_failed`, and the payment intent and webhook events logged while serving it. It is not carried into the outbox or BullMQ jobs; dispatcher and worker events carry `webhookEventId` and `jobId` instead. To connect them to a webhook request, look up the `webhook_events` row by `external_event_id` (the `externalEventId` in `webhook_accepted`).
 

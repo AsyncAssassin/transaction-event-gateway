@@ -73,6 +73,7 @@ describe('WebhookEventsQueueHolder', () => {
         connection: {
           url: redisUrl,
           connectTimeout: 2_000,
+          commandTimeout: 5_000,
           maxRetriesPerRequest: 1,
         },
         defaultJobOptions: PROCESS_WEBHOOK_EVENT_JOB_OPTIONS,

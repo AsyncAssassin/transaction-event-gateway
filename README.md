@@ -314,7 +314,7 @@ Operational troubleshooting notes are in `docs/runbook.md`.
 
 ## Observability
 
-- Structured logs include correlation IDs, request metadata, safe entity identifiers, statuses, and error codes.
+- Structured logs include correlation IDs, request metadata, safe entity identifiers, statuses, and error codes. 5xx responses and worker failures also log the error name, a safe cause code such as a SQLSTATE or errno, and the top stack frames, never the raw error message.
 - `X-Correlation-ID` is accepted on inbound requests; missing values are generated and returned in responses.
 - `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis. `/health/serving` excludes Redis for load balancer serving readiness.
 - Swagger UI and OpenAPI JSON are exposed at `/docs` and `/docs/openapi.json` for the implemented API surface.
@@ -373,6 +373,7 @@ The smoke script checks health, OpenAPI, payment intent idempotency, signed webh
 - **Idempotency conflict**: same key and different payload returns `409 IDEMPOTENCY_CONFLICT`.
 - **Invalid webhook signature**: returns `401 INVALID_WEBHOOK_SIGNATURE`; no inbox or outbox row is written.
 - **Stale timestamp**: returns `400 STALE_WEBHOOK_TIMESTAMP`; no inbox or outbox row is written.
+- **Malformed body**: NUL and other control characters, unpaired surrogates, nesting deeper than 32 levels, and keys such as `__proto__` return `400 VALIDATION_ERROR` before routing and before the signature check.
 - **Duplicate webhook**: same provider event ID and same payload returns `202 ALREADY_ACCEPTED`.
 - **Nonce replay**: reused nonce for a different event returns `409 WEBHOOK_NONCE_REPLAY`.
 - **Redis unavailable**: payment intent creation and webhook acceptance can still persist durable state; `/health/ready` returns unavailable, `/health/serving` can remain healthy when configuration and PostgreSQL are healthy, and dispatching/worker processing waits and retries.

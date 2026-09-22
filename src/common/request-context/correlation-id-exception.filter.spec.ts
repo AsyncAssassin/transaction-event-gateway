@@ -50,15 +50,20 @@ function sentBody(response: ResponseMock): Record<string, unknown> {
 describe('CorrelationIdExceptionFilter', () => {
   const filter = new CorrelationIdExceptionFilter();
   let errorLog: jest.SpyInstance;
+  let warnLog: jest.SpyInstance;
 
   beforeEach(() => {
     errorLog = jest
       .spyOn(StructuredLogger.prototype, 'error')
       .mockImplementation(() => undefined);
+    warnLog = jest
+      .spyOn(StructuredLogger.prototype, 'warn')
+      .mockImplementation(() => undefined);
   });
 
   afterEach(() => {
     errorLog.mockRestore();
+    warnLog.mockRestore();
   });
 
   it('passes structured HttpException bodies through and echoes a safe correlation ID', () => {
@@ -187,5 +192,50 @@ describe('CorrelationIdExceptionFilter', () => {
       'http_request_failed',
       expect.objectContaining({ errorCode: 'INTERNAL_SERVER_ERROR' }),
     );
+  });
+
+  it('logs the error name, cause code, and top stack frames of a 500 without its message', () => {
+    const { host } = createHost();
+    const error = Object.assign(new RangeError('value "cust_123" too deep'), {
+      code: 'ERR_SOMETHING',
+    });
+
+    filter.catch(error, host);
+
+    expect(errorLog).toHaveBeenCalledWith(
+      'http_request_failed',
+      expect.objectContaining({
+        status: 500,
+        errorCode: 'INTERNAL_SERVER_ERROR',
+        errorName: 'RangeError',
+        causeCode: 'ERR_SOMETHING',
+        stackTop: expect.stringMatching(/^at /),
+      }),
+    );
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain('cust_123');
+  });
+
+  it('maps PostgreSQL data exceptions to 400 and warns with the SQLSTATE', () => {
+    const { host, response } = createHost();
+    const error = Object.assign(
+      new Error('invalid byte sequence for encoding "UTF8": 0x00'),
+      { name: 'QueryFailedError', driverError: { code: '22021' } },
+    );
+
+    filter.catch(error, host);
+
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(sentBody(response)).toEqual({
+      error: 'VALIDATION_ERROR',
+      message: 'Request could not be processed.',
+      correlationId: expect.stringMatching(uuidPattern),
+    });
+    expect(errorLog).not.toHaveBeenCalled();
+    expect(warnLog).toHaveBeenCalledWith('http_request_data_exception', {
+      correlationId: expect.stringMatching(uuidPattern),
+      status: 400,
+      errorCode: 'DATABASE_DATA_EXCEPTION',
+      causeCode: '22021',
+    });
   });
 });

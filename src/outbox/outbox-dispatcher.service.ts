@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 
+import { describeError } from '../common/errors/describe-error';
 import { sanitizeErrorMessage } from '../common/errors/sanitize-error';
 import {
   StructuredLogger,
@@ -77,6 +78,7 @@ export class OutboxDispatcherService {
             this.logger.warn('outbox_dispatch_failed', {
               status: OutboxEventStatus.Failed,
               errorCode: toSafeErrorCode(error, 'OUTBOX_DISPATCH_FAILED'),
+              ...describeError(error),
             });
           }
           result.failed += 1;
@@ -98,8 +100,14 @@ export class OutboxDispatcherService {
             webhookEventId,
             status: OutboxEventStatus.Failed,
             errorCode: toSafeErrorCode(error, 'OUTBOX_DISPATCH_FAILED'),
+            ...describeError(error),
           });
           result.failed += 1;
+          // A failed publish means Redis is down or not answering, so the
+          // remaining rows would fail the same way, each after a command
+          // timeout, while this transaction keeps them locked. Leave them for
+          // the next run.
+          break;
         }
       }
 

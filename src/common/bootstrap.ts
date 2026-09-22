@@ -3,19 +3,24 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { httpRequestLoggingMiddleware } from './logging/http-request-logging.middleware';
 import { CorrelationIdExceptionFilter } from './request-context/correlation-id-exception.filter';
 import { correlationIdMiddleware } from './request-context/correlation-id.middleware';
+import { requestBodyGuardMiddleware } from './validation/request-body-guard.middleware';
 import { createValidationException } from './validation/validation-error-response';
 
 const MAX_REQUEST_BODY_SIZE = '256kb';
 
-type JsonBodyParserApplication = INestApplication & {
-  useBodyParser(parser: 'json', options: { limit: string }): INestApplication;
+type BodyParserApplication = INestApplication & {
+  useBodyParser(
+    parser: 'json' | 'urlencoded',
+    options: { limit?: string; extended?: boolean },
+  ): INestApplication;
 };
 
 export function configureHttpApp(app: INestApplication): void {
   app.enableShutdownHooks();
   app.use(correlationIdMiddleware);
   app.use(httpRequestLoggingMiddleware);
-  configureJsonBodyParser(app);
+  configureBodyParsers(app);
+  app.use(requestBodyGuardMiddleware);
   app.useGlobalFilters(new CorrelationIdExceptionFilter());
   app.useGlobalPipes(
     new ValidationPipe({
@@ -27,7 +32,11 @@ export function configureHttpApp(app: INestApplication): void {
   );
 }
 
-function configureJsonBodyParser(app: INestApplication): void {
-  const bodyParserApp = app as JsonBodyParserApplication;
+// Nest registers any parser that is still missing during init(), after every
+// middleware added here. Registering both parsers explicitly keeps them ahead
+// of the body guard; the urlencoded options match Nest's defaults.
+function configureBodyParsers(app: INestApplication): void {
+  const bodyParserApp = app as BodyParserApplication;
   bodyParserApp.useBodyParser('json', { limit: MAX_REQUEST_BODY_SIZE });
+  bodyParserApp.useBodyParser('urlencoded', { extended: true });
 }

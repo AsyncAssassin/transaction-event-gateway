@@ -15,7 +15,10 @@ export type StructuredLogField =
   | 'method'
   | 'path'
   | 'durationMs'
-  | 'suppressedCount';
+  | 'suppressedCount'
+  | 'errorName'
+  | 'causeCode'
+  | 'stackTop';
 
 export type StructuredLogFields = Partial<Record<StructuredLogField, unknown>>;
 
@@ -33,6 +36,9 @@ const ALLOWED_LOG_FIELDS = new Set<StructuredLogField>([
   'path',
   'durationMs',
   'suppressedCount',
+  'errorName',
+  'causeCode',
+  'stackTop',
 ]);
 
 const MAX_LOG_STRING_LENGTH = 500;

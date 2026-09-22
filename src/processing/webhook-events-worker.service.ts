@@ -6,6 +6,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Job, Worker } from 'bullmq';
 
+import { describeError } from '../common/errors/describe-error';
 import { LogThrottle } from '../common/logging/log-throttle';
 import {
   StructuredLogger,
@@ -64,12 +65,14 @@ export class WebhookEventsWorkerService
 
     this.worker.on('failed', (job, error) => {
       const errorCode = toSafeErrorCode(error, 'WORKER_JOB_FAILED');
+      const diagnostics = describeError(error);
 
       this.logger.warn('worker_job_failed', {
         jobId: normalizeJobId(job?.id),
         webhookEventId: job?.data.webhookEventId,
         status: 'FAILED',
         errorCode,
+        ...diagnostics,
       });
 
       // BullMQ gives up after the last attempt and the webhook event stays
@@ -80,6 +83,7 @@ export class WebhookEventsWorkerService
           webhookEventId: job.data.webhookEventId,
           status: 'FAILED',
           errorCode,
+          ...diagnostics,
         });
       }
     });

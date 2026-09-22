@@ -7,7 +7,7 @@ import {
 } from './structured-logger';
 
 describe('structured logging helpers', () => {
-  it('keeps only approved scalar log fields', () => {
+  it('keeps only allow-listed scalar log fields', () => {
     const entry = createStructuredLogEntry('webhook_rejected', {
       provider: 'blockchain',
       externalEventId: 'evt_123',
@@ -45,6 +45,21 @@ describe('structured logging helpers', () => {
     expect(
       toSafeErrorCode(new Error('redis password leaked'), 'FALLBACK'),
     ).toBe('FALLBACK');
+  });
+
+  it('keeps error diagnostics fields', () => {
+    expect(
+      createStructuredLogEntry('http_request_failed', {
+        errorName: 'QueryFailedError',
+        causeCode: '22021',
+        stackTop: 'at PostgresQueryRunner.query (/app/x.js:1:1)',
+      }),
+    ).toEqual({
+      event: 'http_request_failed',
+      errorName: 'QueryFailedError',
+      causeCode: '22021',
+      stackTop: 'at PostgresQueryRunner.query (/app/x.js:1:1)',
+    });
   });
 
   it('keeps numeric suppressedCount so throttled warnings stay measurable', () => {

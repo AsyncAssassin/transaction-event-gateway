@@ -177,10 +177,14 @@ describe('OutboxDispatcherRunnerService', () => {
 
     expect(dispatcher.reconcileStalePublishedEvents).toHaveBeenCalledTimes(2);
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledWith('outbox_reconcile_failed', {
-      status: 'FAILED',
-      errorCode: 'DB_DOWN',
-    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      'outbox_reconcile_failed',
+      expect.objectContaining({
+        status: 'FAILED',
+        errorCode: 'DB_DOWN',
+        errorName: 'Error',
+      }),
+    );
   });
 
   it('skips a reconcile tick while the previous run is still in flight and waits for it on shutdown', async () => {
