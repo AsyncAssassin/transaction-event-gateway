@@ -1,5 +1,13 @@
 import Joi from 'joi';
 
+import { DATABASE_URL_PATTERN_MESSAGES } from '../database/database-url.validation';
+
+// Joi's default pattern message echoes the rejected value, which would print
+// connection credentials into the logs on a misconfigured URL.
+const REDIS_URL_PATTERN_MESSAGES = {
+  'string.pattern.base': '{{#label}} must be a redis:// or rediss:// URL',
+};
+
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string()
     .valid('development', 'test', 'production')
@@ -7,9 +15,11 @@ export const envValidationSchema = Joi.object({
   PORT: Joi.number().port().default(3000),
   DATABASE_URL: Joi.string()
     .pattern(/^postgres(ql)?:\/\/.+/)
+    .messages(DATABASE_URL_PATTERN_MESSAGES)
     .required(),
   REDIS_URL: Joi.string()
     .pattern(/^rediss?:\/\/.+/)
+    .messages(REDIS_URL_PATTERN_MESSAGES)
     .required(),
   WEBHOOK_SECRET: Joi.string().min(16).required(),
   WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: Joi.number()
