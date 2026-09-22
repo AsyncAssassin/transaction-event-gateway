@@ -39,6 +39,17 @@ export class RedisHealthCheckService implements OnModuleDestroy {
   }
 
   private getClient(): Redis {
+    // retryStrategy disables reconnects, so a client whose connection was
+    // dropped by an outage ends up in 'end' (or 'close') and can never become
+    // ready again. Replace it here instead of failing the first check after
+    // Redis recovers.
+    if (
+      this.client &&
+      (this.client.status === 'end' || this.client.status === 'close')
+    ) {
+      this.resetClient(this.client);
+    }
+
     if (!this.client) {
       const { url, ...options } = createHealthRedisConnectionOptions(
         this.configService.getOrThrow<string>('REDIS_URL'),

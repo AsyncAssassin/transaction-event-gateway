@@ -85,6 +85,26 @@ describe('RedisHealthCheckService', () => {
     expect(redis.disconnect).toHaveBeenCalledWith(false);
   });
 
+  it('replaces a client whose connection ended so the first check after recovery succeeds', async () => {
+    const endedRedis = createRedisMock();
+    const freshRedis = createRedisMock();
+    redisConstructor
+      .mockImplementationOnce(() => endedRedis)
+      .mockImplementationOnce(() => freshRedis);
+
+    await service.check();
+    // Redis dropped the connection during an outage; with reconnects disabled
+    // ioredis parks the client in 'end' and no readiness call observed it.
+    endedRedis.status = 'end';
+
+    await expect(service.check()).resolves.toBeUndefined();
+
+    expect(endedRedis.disconnect).toHaveBeenCalledWith(false);
+    expect(endedRedis.ping).toHaveBeenCalledTimes(1);
+    expect(freshRedis.connect).toHaveBeenCalledTimes(1);
+    expect(freshRedis.ping).toHaveBeenCalledTimes(1);
+  });
+
   it('resets a failed client so a later check creates a fresh Redis client', async () => {
     const failedRedis = createRedisMock({
       connect: jest.fn().mockRejectedValue(new Error('redis down')),
