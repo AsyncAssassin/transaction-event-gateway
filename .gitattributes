@@ -1,0 +1,4 @@
+# Keep line endings LF on every platform so the Prettier check (endOfLine=lf)
+# gives the same result locally and in CI.
+* text=auto eol=lf
+*.png binary

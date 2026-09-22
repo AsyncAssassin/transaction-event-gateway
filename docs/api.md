@@ -326,7 +326,7 @@ Required documentation:
 - Path, method, summary, and operation ID for every endpoint.
 - Header parameters for `Idempotency-Key`, `X-Correlation-ID`, and webhook signature headers.
 - Request DTO schemas with examples.
-- Response schemas for success, replay, conflict, validation, unauthorized, timeout, and service unavailable cases.
+- Response schemas for success, replay, conflict, validation, unauthorized, stale timestamp, and service unavailable cases.
 - Enum schemas for payment intent and webhook statuses.
 - `Idempotent-Replayed` response header on replayed `POST /payment-intents` calls.
 - Security notes explaining that webhook signatures are computed over the raw body and are not derived from parsed JSON.
