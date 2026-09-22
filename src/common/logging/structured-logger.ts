@@ -114,7 +114,8 @@ function getHttpExceptionErrorCode(error: unknown): string | undefined {
 
   const errorCode = (response as { error?: unknown }).error;
 
-  return typeof errorCode === 'string' && SAFE_ERROR_CODE_PATTERN.test(errorCode)
+  return typeof errorCode === 'string' &&
+    SAFE_ERROR_CODE_PATTERN.test(errorCode)
     ? errorCode
     : undefined;
 }

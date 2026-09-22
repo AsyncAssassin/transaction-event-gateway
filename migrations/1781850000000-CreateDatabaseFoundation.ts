@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateDatabaseFoundation1781850000000
-  implements MigrationInterface
-{
+export class CreateDatabaseFoundation1781850000000 implements MigrationInterface {
   name = 'CreateDatabaseFoundation1781850000000';
 
   async up(queryRunner: QueryRunner): Promise<void> {

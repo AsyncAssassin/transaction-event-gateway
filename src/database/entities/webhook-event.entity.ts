@@ -17,12 +17,13 @@ export enum WebhookEventStatus {
 }
 
 @Entity('webhook_events')
-@Index('webhook_events_provider_external_event_id_uniq', [
-  'provider',
-  'externalEventId',
-], {
-  unique: true,
-})
+@Index(
+  'webhook_events_provider_external_event_id_uniq',
+  ['provider', 'externalEventId'],
+  {
+    unique: true,
+  },
+)
 @Index('webhook_events_provider_nonce_uniq', ['provider', 'nonce'], {
   unique: true,
   where: '"nonce" IS NOT NULL',

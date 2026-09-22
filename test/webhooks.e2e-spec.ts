@@ -250,7 +250,10 @@ describe('Blockchain webhooks (e2e)', () => {
       secondRequest,
     ]);
 
-    const statuses = [firstResponse.body.status, secondResponse.body.status].sort();
+    const statuses = [
+      firstResponse.body.status,
+      secondResponse.body.status,
+    ].sort();
     expect(firstResponse.status).toBe(202);
     expect(secondResponse.status).toBe(202);
     expect(statuses).toEqual(['ACCEPTED', 'ALREADY_ACCEPTED']);

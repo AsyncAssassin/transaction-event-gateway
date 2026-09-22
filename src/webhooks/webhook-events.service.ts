@@ -98,7 +98,9 @@ export class WebhookEventsService {
       });
 
       this.logger.info(
-        response.status === 'ACCEPTED' ? 'webhook_accepted' : 'webhook_replayed',
+        response.status === 'ACCEPTED'
+          ? 'webhook_accepted'
+          : 'webhook_replayed',
         {
           provider: BLOCKCHAIN_WEBHOOK_PROVIDER,
           externalEventId: response.eventId,
@@ -119,13 +121,15 @@ export class WebhookEventsService {
     }
   }
 
-  private validateHeaders(headers: WebhookRequestHeaders): ValidatedWebhookHeaders {
-    const contentType = headers.contentType?.toLowerCase().split(';')[0]?.trim();
+  private validateHeaders(
+    headers: WebhookRequestHeaders,
+  ): ValidatedWebhookHeaders {
+    const contentType = headers.contentType
+      ?.toLowerCase()
+      .split(';')[0]
+      ?.trim();
 
-    if (
-      !contentType ||
-      contentType !== 'application/json'
-    ) {
+    if (!contentType || contentType !== 'application/json') {
       throw new BadRequestException({
         error: 'VALIDATION_ERROR',
         message: 'Content-Type must be application/json.',
@@ -200,7 +204,8 @@ export class WebhookEventsService {
     if (!hasValidWebhookSignatureFormat(headers.signature)) {
       throw new BadRequestException({
         error: 'VALIDATION_ERROR',
-        message: 'X-Webhook-Signature header must use v1=<hex_signature> format.',
+        message:
+          'X-Webhook-Signature header must use v1=<hex_signature> format.',
       });
     }
 

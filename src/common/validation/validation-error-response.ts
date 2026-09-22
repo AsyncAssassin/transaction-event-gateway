@@ -1,7 +1,4 @@
-import {
-  BadRequestException,
-  ValidationError,
-} from '@nestjs/common';
+import { BadRequestException, ValidationError } from '@nestjs/common';
 
 export type ValidationErrorDetail = {
   field: string;
@@ -16,11 +13,16 @@ export function flattenValidationErrors(
     const fieldPath = parentPath
       ? `${parentPath}.${error.property}`
       : error.property;
-    const ownDetails = Object.values(error.constraints ?? {}).map((message) => ({
-      field: fieldPath,
-      message,
-    }));
-    const childDetails = flattenValidationErrors(error.children ?? [], fieldPath);
+    const ownDetails = Object.values(error.constraints ?? {}).map(
+      (message) => ({
+        field: fieldPath,
+        message,
+      }),
+    );
+    const childDetails = flattenValidationErrors(
+      error.children ?? [],
+      fieldPath,
+    );
 
     return [...ownDetails, ...childDetails];
   });

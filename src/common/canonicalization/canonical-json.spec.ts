@@ -1,7 +1,4 @@
-import {
-  hashCanonicalJson,
-  serializeCanonicalJson,
-} from './canonical-json';
+import { hashCanonicalJson, serializeCanonicalJson } from './canonical-json';
 
 describe('canonical JSON hashing', () => {
   it('serializes object keys in a stable recursive order', () => {

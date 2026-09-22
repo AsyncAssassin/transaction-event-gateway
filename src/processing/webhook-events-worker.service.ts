@@ -22,7 +22,9 @@ import { WebhookEventProcessorService } from './webhook-event-processor.service'
 export class WebhookEventsWorkerService
   implements OnApplicationBootstrap, OnApplicationShutdown
 {
-  private readonly logger = new StructuredLogger(WebhookEventsWorkerService.name);
+  private readonly logger = new StructuredLogger(
+    WebhookEventsWorkerService.name,
+  );
   private worker: Worker<ProcessWebhookEventJobData> | null = null;
 
   constructor(
@@ -98,6 +100,8 @@ export class WebhookEventsWorkerService
   }
 }
 
-function normalizeJobId(jobId: string | number | undefined): string | undefined {
+function normalizeJobId(
+  jobId: string | number | undefined,
+): string | undefined {
   return jobId === undefined ? undefined : String(jobId);
 }

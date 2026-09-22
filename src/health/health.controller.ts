@@ -41,7 +41,8 @@ export class HealthController {
   @Get('serving')
   @ApiOperation({
     operationId: 'getServingReadiness',
-    summary: 'Check serving readiness for load balancer routing (config, PostgreSQL)',
+    summary:
+      'Check serving readiness for load balancer routing (config, PostgreSQL)',
   })
   @ApiOkResponse({
     description:

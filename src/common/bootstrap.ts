@@ -1,7 +1,4 @@
-import {
-  INestApplication,
-  ValidationPipe,
-} from '@nestjs/common';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
 
 import { httpRequestLoggingMiddleware } from './logging/http-request-logging.middleware';
 import { CorrelationIdExceptionFilter } from './request-context/correlation-id-exception.filter';

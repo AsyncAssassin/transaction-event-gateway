@@ -1,9 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 
-import {
-  createRequestContext,
-  runWithRequestContext,
-} from './request-context';
+import { createRequestContext, runWithRequestContext } from './request-context';
 
 export const CORRELATION_ID_HEADER = 'X-Correlation-ID';
 

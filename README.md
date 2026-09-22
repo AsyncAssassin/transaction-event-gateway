@@ -368,6 +368,7 @@ Current verification commands:
 ```bash
 npm run typecheck
 npm run lint
+npm run format:check
 npm test
 docker compose up -d postgres redis
 npm run test:e2e

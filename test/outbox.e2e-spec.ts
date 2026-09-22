@@ -83,7 +83,12 @@ describe('Outbox dispatcher (e2e)', () => {
     expect(outboxRows[0]?.publishedAt).toBeInstanceOf(Date);
     await expectWebhookStatus(dataSource, webhookEventId, 'QUEUED');
 
-    const jobs = await queue.getJobs(['waiting', 'delayed', 'completed', 'failed']);
+    const jobs = await queue.getJobs([
+      'waiting',
+      'delayed',
+      'completed',
+      'failed',
+    ]);
     expect(jobs).toHaveLength(1);
     expect(jobs[0]?.name).toBe(PROCESS_WEBHOOK_EVENT_JOB_NAME);
     expect(jobs[0]?.data).toEqual({ webhookEventId });
@@ -216,7 +221,9 @@ describe('Outbox dispatcher (e2e)', () => {
       published: 0,
       failed: 0,
     });
-    expect(failingPublisher.publishProcessWebhookEvent).toHaveBeenCalledTimes(1);
+    expect(failingPublisher.publishProcessWebhookEvent).toHaveBeenCalledTimes(
+      1,
+    );
   });
 
   it('dead-letters a deterministic poison outbox payload without publishing', async () => {
@@ -378,7 +385,12 @@ async function insertRetryableFailedOutboxEvent(
         now() - interval '1 minute'
       )
     `,
-    [outboxEventId, webhookEventId, JSON.stringify({ webhookEventId }), attempts],
+    [
+      outboxEventId,
+      webhookEventId,
+      JSON.stringify({ webhookEventId }),
+      attempts,
+    ],
   );
 
   return outboxEventId;
@@ -465,11 +477,7 @@ async function insertOutboxEvent(
         'PENDING'
       )
     `,
-    [
-      outboxEventId,
-      webhookEventId,
-      JSON.stringify(payload),
-    ],
+    [outboxEventId, webhookEventId, JSON.stringify(payload)],
   );
 
   return outboxEventId;
@@ -502,6 +510,8 @@ async function expectWebhookStatus(
   expect(rows).toEqual([{ status: expectedStatus }]);
 }
 
-async function cleanQueue(queue: Queue<ProcessWebhookEventJobData>): Promise<void> {
+async function cleanQueue(
+  queue: Queue<ProcessWebhookEventJobData>,
+): Promise<void> {
   await queue.obliterate({ force: true });
 }

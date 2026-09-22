@@ -14,11 +14,13 @@ describe('OutboxDispatcherRunnerService', () => {
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
     jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     dispatcher = {
-      dispatchBatch: jest.fn<Promise<OutboxDispatchBatchResult>, []>().mockResolvedValue({
-        selected: 0,
-        published: 0,
-        failed: 0,
-      }),
+      dispatchBatch: jest
+        .fn<Promise<OutboxDispatchBatchResult>, []>()
+        .mockResolvedValue({
+          selected: 0,
+          published: 0,
+          failed: 0,
+        }),
     };
   });
 

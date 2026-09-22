@@ -218,7 +218,9 @@ describe('Payment intents (e2e)', () => {
   });
 });
 
-async function truncatePaymentIntentTables(dataSource: DataSource): Promise<void> {
+async function truncatePaymentIntentTables(
+  dataSource: DataSource,
+): Promise<void> {
   await dataSource.query(
     'TRUNCATE TABLE idempotency_records, payment_intents RESTART IDENTITY CASCADE',
   );

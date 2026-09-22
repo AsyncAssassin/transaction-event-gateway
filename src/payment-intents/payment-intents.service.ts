@@ -5,7 +5,10 @@ import {
 } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 
-import { hashCanonicalJson, JsonValue } from '../common/canonicalization/canonical-json';
+import {
+  hashCanonicalJson,
+  JsonValue,
+} from '../common/canonicalization/canonical-json';
 import {
   StructuredLogger,
   toSafeErrorCode,
@@ -91,8 +94,10 @@ export class PaymentIntentsService {
           { id: idempotencyRecordId },
         );
         idempotencyRecord.responseStatus = 201;
-        idempotencyRecord.responseBody =
-          responseBody as unknown as Record<string, unknown>;
+        idempotencyRecord.responseBody = responseBody as unknown as Record<
+          string,
+          unknown
+        >;
         idempotencyRecord.resourceType = IDEMPOTENCY_RESOURCE_TYPE;
         idempotencyRecord.resourceId = paymentIntent.id;
         await manager.save(idempotencyRecord);
@@ -114,10 +119,7 @@ export class PaymentIntentsService {
 
       return result;
     } catch (error) {
-      const errorCode = toSafeErrorCode(
-        error,
-        'PAYMENT_INTENT_CREATE_FAILED',
-      );
+      const errorCode = toSafeErrorCode(error, 'PAYMENT_INTENT_CREATE_FAILED');
 
       if (errorCode === 'IDEMPOTENCY_CONFLICT') {
         this.logger.warn('payment_intent_conflict', {
@@ -170,7 +172,8 @@ export class PaymentIntentsService {
     if (!existingRecord) {
       throw new ServiceUnavailableException({
         error: 'SERVICE_UNAVAILABLE',
-        message: 'The idempotency record could not be read after conflict detection.',
+        message:
+          'The idempotency record could not be read after conflict detection.',
       });
     }
 
@@ -182,7 +185,10 @@ export class PaymentIntentsService {
       });
     }
 
-    if (existingRecord.responseStatus === null || existingRecord.responseBody === null) {
+    if (
+      existingRecord.responseStatus === null ||
+      existingRecord.responseBody === null
+    ) {
       throw new ServiceUnavailableException({
         error: 'SERVICE_UNAVAILABLE',
         message: 'The idempotent response snapshot is not available.',
@@ -196,7 +202,9 @@ export class PaymentIntentsService {
     };
   }
 
-  private toCanonicalPayload(dto: CreatePaymentIntentDto): PaymentIntentCreatePayload {
+  private toCanonicalPayload(
+    dto: CreatePaymentIntentDto,
+  ): PaymentIntentCreatePayload {
     return {
       amount: dto.amount,
       asset: dto.asset,
@@ -207,7 +215,9 @@ export class PaymentIntentsService {
     };
   }
 
-  private toResponse(paymentIntent: PaymentIntentEntity): PaymentIntentResponse {
+  private toResponse(
+    paymentIntent: PaymentIntentEntity,
+  ): PaymentIntentResponse {
     return {
       id: paymentIntent.id,
       status: paymentIntent.status,

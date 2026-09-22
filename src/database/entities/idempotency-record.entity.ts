@@ -31,7 +31,12 @@ export class IdempotencyRecordEntity {
   @Column({ name: 'response_body', type: 'jsonb', nullable: true })
   responseBody!: Record<string, unknown> | null;
 
-  @Column({ name: 'resource_type', type: 'varchar', length: 128, nullable: true })
+  @Column({
+    name: 'resource_type',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
   resourceType!: string | null;
 
   @Column({ name: 'resource_id', type: 'uuid', nullable: true })

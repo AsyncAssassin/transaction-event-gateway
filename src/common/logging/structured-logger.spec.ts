@@ -1,9 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 
-import {
-  createStructuredLogEntry,
-  toSafeErrorCode,
-} from './structured-logger';
+import { createStructuredLogEntry, toSafeErrorCode } from './structured-logger';
 
 describe('structured logging helpers', () => {
   it('keeps only approved scalar log fields', () => {
@@ -41,8 +38,8 @@ describe('structured logging helpers', () => {
   });
 
   it('falls back instead of logging arbitrary error messages as codes', () => {
-    expect(toSafeErrorCode(new Error('redis password leaked'), 'FALLBACK')).toBe(
-      'FALLBACK',
-    );
+    expect(
+      toSafeErrorCode(new Error('redis password leaked'), 'FALLBACK'),
+    ).toBe('FALLBACK');
   });
 });

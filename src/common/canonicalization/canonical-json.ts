@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 
 export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue =
+  | JsonPrimitive
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return (
@@ -34,5 +37,7 @@ export function serializeCanonicalJson(value: JsonValue): string {
 }
 
 export function hashCanonicalJson(value: JsonValue): string {
-  return createHash('sha256').update(serializeCanonicalJson(value)).digest('hex');
+  return createHash('sha256')
+    .update(serializeCanonicalJson(value))
+    .digest('hex');
 }

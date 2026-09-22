@@ -117,6 +117,7 @@ Current commands implemented in `package.json`:
 ```bash
 npm run typecheck
 npm run lint
+npm run format:check
 npm test
 npm run test:e2e
 npm run build
@@ -135,7 +136,7 @@ DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway npm run
 
 The e2e global setup runs migrations against the configured local PostgreSQL database before the e2e suite starts.
 
-CI gates dependency risk with `npm audit --omit=dev` (production dependency tree, expected `0 vulnerabilities`). A moderate `js-yaml@3` advisory appears only in the dev tree (the istanbul/nyc chain used by Jest coverage) and does not affect the runtime, so it is out of scope for the production audit gate.
+CI gates dependency risk with `npm audit --omit=dev` (production dependency tree, expected `0 vulnerabilities`). Dev-only advisories are outside that gate, so run the full `npm audit` periodically as well.
 
 ## Local Smoke Check
 

@@ -21,6 +21,8 @@
     "migration:revert:prod": "npm run typeorm:prod -- migration:revert",
     "migration:show:prod": "npm run typeorm:prod -- migration:show",
     "lint": "eslint \"{src,test,migrations}/**/*.ts\"",
+    "format": "prettier --write \"{src,test,migrations}/**/*.ts\"",
+    "format:check": "prettier --check \"{src,test,migrations}/**/*.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "jest --config jest.config.js",
     "test:e2e": "jest --config test/jest-e2e.config.js",

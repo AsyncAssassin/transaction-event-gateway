@@ -46,7 +46,9 @@ export class PaymentIntentsController {
       },
     },
   })
-  @ApiBadRequestResponse({ description: 'Missing header or invalid request body.' })
+  @ApiBadRequestResponse({
+    description: 'Missing header or invalid request body.',
+  })
   @ApiConflictResponse({
     description: 'Idempotency key was already used for a different payload.',
   })

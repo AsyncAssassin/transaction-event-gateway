@@ -54,7 +54,9 @@ export function verifyWebhookSignature({
     nonce,
     rawBody,
   }).slice(WEBHOOK_SIGNATURE_PREFIX.length);
-  const providedSignature = signatureHeader.slice(WEBHOOK_SIGNATURE_PREFIX.length);
+  const providedSignature = signatureHeader.slice(
+    WEBHOOK_SIGNATURE_PREFIX.length,
+  );
 
   const expectedBuffer = Buffer.from(expectedSignature, 'hex');
   const providedBuffer = Buffer.from(providedSignature, 'hex');
