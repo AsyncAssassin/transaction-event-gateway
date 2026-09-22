@@ -293,6 +293,37 @@ describe('Webhook event processor (e2e)', () => {
     });
   });
 
+  it('marks a confirmed event without a transaction hash as FAILED without mutating the payment intent', async () => {
+    const paymentIntentId = await insertPaymentIntent(dataSource);
+    const webhookEventId = await insertWebhookEvent(dataSource, {
+      paymentIntentId,
+      txHash: null,
+    });
+
+    await expect(
+      processor.processWebhookEvent({
+        webhookEventId,
+        jobId: 'job-missing-tx-hash',
+      }),
+    ).resolves.toEqual({ status: 'failed', reason: 'MISSING_TX_HASH' });
+
+    await expectPaymentIntent(dataSource, paymentIntentId, {
+      status: 'CREATED',
+      confirmedTxHash: null,
+    });
+    await expectWebhookEvent(dataSource, webhookEventId, {
+      status: 'FAILED',
+      failureReason: 'MISSING_TX_HASH',
+    });
+    await expectAttemptRows(dataSource, webhookEventId, [
+      {
+        jobId: 'job-missing-tx-hash',
+        status: 'FAILED',
+        errorMessage: 'MISSING_TX_HASH',
+      },
+    ]);
+  });
+
   it('fails when the transaction hash already confirms another payment intent', async () => {
     const sharedTxHash = '0xshared-confirmed';
     await insertPaymentIntent(dataSource, {
@@ -340,6 +371,49 @@ describe('Webhook event processor (e2e)', () => {
     ).rejects.toThrow('CRASH_BEFORE_COMMIT');
 
     saveSpy.mockRestore();
+
+    await expectPaymentIntent(dataSource, paymentIntentId, {
+      status: 'CREATED',
+      confirmedTxHash: null,
+    });
+    await expectWebhookEvent(dataSource, webhookEventId, {
+      status: 'RECEIVED',
+      failureReason: null,
+    });
+    await expectAttemptRows(dataSource, webhookEventId, []);
+  });
+
+  it('rolls back the payment intent update when the crash happens after it but before commit', async () => {
+    const paymentIntentId = await insertPaymentIntent(dataSource);
+    const webhookEventId = await insertWebhookEvent(dataSource, {
+      paymentIntentId,
+      txHash: '0xcrash-after-intent-update',
+    });
+
+    // The processing attempt insert is the last write of the transaction: by
+    // then the payment intent has been saved as CONFIRMED and the webhook as
+    // PROCESSED. Failing here must roll all of that back.
+    const saveSpy = jest.spyOn(EntityManager.prototype, 'save');
+    const insertSpy = jest
+      .spyOn(EntityManager.prototype, 'insert')
+      .mockImplementationOnce(() => {
+        throw new Error('CRASH_AFTER_INTENT_UPDATE');
+      });
+
+    try {
+      await expect(
+        processor.processWebhookEvent({
+          webhookEventId,
+          jobId: 'job-crash-late',
+        }),
+      ).rejects.toThrow('CRASH_AFTER_INTENT_UPDATE');
+
+      // webhook -> PROCESSING, payment intent -> CONFIRMED, webhook -> PROCESSED
+      expect(saveSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      insertSpy.mockRestore();
+      saveSpy.mockRestore();
+    }
 
     await expectPaymentIntent(dataSource, paymentIntentId, {
       status: 'CREATED',
@@ -410,7 +484,7 @@ async function insertWebhookEvent(
   overrides: Partial<{
     status: 'RECEIVED' | 'PROCESSED';
     paymentIntentId: string;
-    txHash: string;
+    txHash: string | null;
     amount: string;
     asset: string;
     reference: string;
@@ -420,11 +494,16 @@ async function insertWebhookEvent(
   const webhookEventId = randomUUID();
   const paymentIntentId = overrides.paymentIntentId ?? randomUUID();
   const type = overrides.type ?? 'transaction.confirmed';
+  // txHash: null simulates a provider payload that omits the hash entirely.
+  const txHash =
+    overrides.txHash === undefined
+      ? `0x${webhookEventId.replace(/-/g, '')}`
+      : overrides.txHash;
   const payload = {
     eventId: `evt_${webhookEventId}`,
     type,
     paymentIntentId,
-    txHash: overrides.txHash ?? `0x${webhookEventId.replace(/-/g, '')}`,
+    ...(txHash === null ? {} : { txHash }),
     amount: overrides.amount ?? '125.50',
     asset: overrides.asset ?? 'USDC',
     ...(overrides.reference !== undefined
@@ -468,7 +547,7 @@ async function insertWebhookEvent(
       payload.eventId,
       `nonce_${webhookEventId}`,
       paymentIntentId,
-      payload.txHash,
+      txHash,
       JSON.stringify(payload),
       `hash_${webhookEventId}`,
       overrides.status ?? 'RECEIVED',

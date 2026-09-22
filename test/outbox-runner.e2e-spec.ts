@@ -38,10 +38,14 @@ describe('Outbox dispatcher runner (e2e)', () => {
   });
 
   afterAll(async () => {
-    await truncateProcessingTables(dataSource);
-    await moduleRef.close();
-    restoreEnv('OUTBOX_DISPATCH_ENABLED', previousEnabled);
-    restoreEnv('OUTBOX_DISPATCH_INTERVAL_MS', previousInterval);
+    try {
+      await truncateProcessingTables(dataSource);
+      await moduleRef.close();
+    } finally {
+      // Restore even if teardown throws so later suites see the original env.
+      restoreEnv('OUTBOX_DISPATCH_ENABLED', previousEnabled);
+      restoreEnv('OUTBOX_DISPATCH_INTERVAL_MS', previousInterval);
+    }
   });
 
   it('auto-publishes a pending outbox row and drives the webhook to PROCESSED', async () => {

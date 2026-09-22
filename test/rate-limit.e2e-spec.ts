@@ -37,12 +37,16 @@ describe('Rate limiting (e2e)', () => {
   });
 
   afterAll(async () => {
-    await app.close();
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
+    try {
+      await app.close();
+    } finally {
+      // Restore even if close() throws so later suites see the original env.
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
       }
     }
   });

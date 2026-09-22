@@ -259,6 +259,54 @@ describe('Blockchain webhooks (e2e)', () => {
     expect(statuses).toEqual(['ACCEPTED', 'ALREADY_ACCEPTED']);
     await expectWebhookAndOutboxCounts(dataSource, 1, 1);
   });
+
+  it('rejects an unknown reference field after signature verification without persisting rows', async () => {
+    const response = await sendSignedWebhook({
+      app,
+      payload: {
+        ...basePayload,
+        reference: 'order-1001',
+      },
+      nonce: 'nonce_unknown_reference',
+    }).expect(400);
+
+    expect(response.body).toMatchObject({
+      error: 'VALIDATION_ERROR',
+    });
+    expect(response.body.details).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'reference' })]),
+    );
+    await expectWebhookAndOutboxCounts(dataSource, 0, 0);
+  });
+
+  it('accepts exactly one of two concurrent events that reuse the same nonce', async () => {
+    const [firstResponse, secondResponse] = await Promise.all([
+      sendSignedWebhook({
+        app,
+        payload: basePayload,
+        nonce: 'nonce_shared',
+      }),
+      sendSignedWebhook({
+        app,
+        payload: {
+          ...basePayload,
+          eventId: 'evt_789',
+          txHash: '0xtest789',
+        },
+        nonce: 'nonce_shared',
+      }),
+    ]);
+
+    expect([firstResponse.status, secondResponse.status].sort()).toEqual([
+      202, 409,
+    ]);
+    const rejected =
+      firstResponse.status === 409 ? firstResponse : secondResponse;
+    expect(rejected.body).toMatchObject({
+      error: 'WEBHOOK_NONCE_REPLAY',
+    });
+    await expectWebhookAndOutboxCounts(dataSource, 1, 1);
+  });
 });
 
 function sendSignedWebhook({
