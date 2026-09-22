@@ -10,7 +10,7 @@ resource "aws_secretsmanager_secret" "database_url" {
 
 resource "aws_secretsmanager_secret" "redis_url" {
   name                    = "${local.name_prefix}/runtime/redis-url"
-  description             = "Complete redis:// REDIS_URL for ECS tasks. Populate only after approval; Terraform does not store the value."
+  description             = "Complete redis:// or rediss:// REDIS_URL for ECS tasks. Populate only after approval; Terraform does not store the value."
   recovery_window_in_days = 7
 
   tags = {

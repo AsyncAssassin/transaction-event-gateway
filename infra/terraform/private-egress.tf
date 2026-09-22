@@ -30,6 +30,13 @@ resource "aws_vpc_endpoint" "s3" {
   tags = {
     Name = "${local.name_prefix}-s3-gateway"
   }
+
+  lifecycle {
+    precondition {
+      condition     = length(var.private_route_table_ids) > 0
+      error_message = "private_route_table_ids must list the private route tables when create_private_egress_endpoints is true; without S3 gateway routes ECS tasks cannot pull ECR image layers."
+    }
+  }
 }
 
 resource "aws_vpc_endpoint" "interface" {

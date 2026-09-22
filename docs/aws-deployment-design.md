@@ -151,9 +151,9 @@ Required or expected runtime values:
 | --- | --- | --- | --- |
 | `NODE_ENV` | Parameter | API, worker, migration task | Use `production` for deployed environments. |
 | `PORT` | Parameter | API | Container listen port, default-compatible value is `3000`. |
-| `DATABASE_URL` | Secret | API, worker, migration task | RDS PostgreSQL connection string. Do not expose publicly. |
+| `DATABASE_URL` | Secret | API, worker, migration task | RDS PostgreSQL connection string with a percent-encoded password and TLS parameters; see the `DATABASE_URL` format in [Terraform scaffold notes](../infra/terraform/README.md). Do not expose publicly. |
 | `REDIS_URL` | Secret or parameter | API, worker | ElastiCache Redis connection string. |
-| `WEBHOOK_SECRET` | Secret | API | HMAC verification secret. Rotate with care; multi-secret rotation is future work. |
+| `WEBHOOK_SECRET` | Secret | API, worker | HMAC verification secret. Only the API verifies signatures, but the worker shares the startup config validation and requires the value. Rotate with care; multi-secret rotation is future work. |
 | `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS` | Parameter | API | Default-compatible value is `300`. |
 | `OUTBOX_DISPATCH_ENABLED` | Parameter | Worker | Usually `true`; can pause queue publication when set to `false`. |
 | `OUTBOX_DISPATCH_INTERVAL_MS` | Parameter | Worker | Default-compatible value is `1000`. |
@@ -173,12 +173,11 @@ Recommended VPC layout:
 
 Security group model:
 
-- **ALB security group**: inbound `443` from allowed public clients; outbound only to the API service port.
-- **API task security group**: inbound API port only from the ALB security group; outbound to RDS, Redis, and the private endpoint security group for required AWS APIs.
-- **Worker task security group**: no inbound rules; outbound to RDS, Redis, and the private endpoint security group for required AWS APIs.
+- **ALB security group**: inbound HTTP on `alb_port` (default `80`) from `allowed_http_cidrs` in the MVP scaffold; outbound only to the API service port. An HTTPS listener on `443` with an approved certificate is required before real client traffic.
+- **ECS task security group**, shared by the API, worker, and migration tasks: inbound API port only from the ALB security group (the worker and migration task listen on no port); outbound to RDS, Redis, the private endpoint security group over HTTPS, and the S3 gateway endpoint prefix list over HTTPS for ECR image layers.
 - **Private endpoint security group**: inbound HTTPS only from the ECS task security group for interface endpoints. S3 gateway endpoint access is routed through approved private route tables.
-- **RDS security group**: inbound PostgreSQL port only from API and worker task security groups.
-- **Redis security group**: inbound Redis port only from API and worker task security groups.
+- **RDS security group**: inbound PostgreSQL port only from the ECS task security group.
+- **Redis security group**: inbound Redis port only from the ECS task security group.
 
 IAM model:
 

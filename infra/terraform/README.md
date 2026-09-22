@@ -108,7 +108,7 @@ The resource implementation should continue in small phases after review:
 | --- | --- |
 | `aws_region` | Target AWS region for future resources. |
 | `project_name` | Short ECR-safe name used in future resource names and tags. Lowercase letters and digits with single hyphens between segments. |
-| `environment` | Short ECR-safe environment name such as `dev`, `stage`, or `staging-1`. Lowercase letters and digits with single hyphens between segments. |
+| `environment` | Short ECR-safe environment name such as `dev`, `stage`, or `qa`. Lowercase letters and digits with single hyphens between segments. Keep `<project_name>-<environment>` at 32 characters or fewer: the ALB and target group names use it directly, so the default project name leaves room for at most six environment characters. |
 | `container_image` | Future ECS image reference. Use only an approved immutable tag or digest in real environments; never use `latest`. |
 | `api_task_cpu` | Fargate CPU units for the API task definition. |
 | `api_task_memory` | Fargate memory in MiB for the API task definition. |
@@ -148,7 +148,7 @@ The resource implementation should continue in small phases after review:
 | `redis_automatic_failover_enabled` | Redis automatic failover switch. Defaults to `false` for this no-apply MVP scaffold. |
 | `redis_multi_az_enabled` | Redis Multi-AZ switch. Defaults to `false`; requires automatic failover when enabled. |
 | `redis_at_rest_encryption_enabled` | Redis at-rest encryption switch. Defaults to `true`. |
-| `redis_transit_encryption_enabled` | Redis in-transit encryption switch. Defaults to `false` because current app config validates `redis://` URLs only. |
+| `redis_transit_encryption_enabled` | Redis in-transit encryption switch. Defaults to `false` for this no-apply MVP scaffold. The app accepts both `redis://` and `rediss://`; when this is `true`, populate `REDIS_URL` with `rediss://`. |
 | `redis_snapshot_retention_limit` | Redis automatic snapshot retention in days. Defaults to `7`; use `0` to disable snapshots. |
 | `redis_apply_immediately` | Whether Redis changes should apply immediately. Defaults to `false` so reviewed changes can wait for the next maintenance window. |
 | `health_check_path` | Future ALB health check path. Defaults to `/health/serving` (configuration and PostgreSQL only). |
@@ -186,6 +186,13 @@ ECS task log group, and private VPC endpoint resources:
   reach Redis on `redis_port`.
 - `aws_vpc_security_group_egress_rule.ecs_tasks_to_private_egress_endpoints`:
   allows ECS tasks to reach private VPC interface endpoints over HTTPS.
+- `aws_vpc_security_group_egress_rule.ecs_tasks_to_s3_gateway_endpoint`: allows
+  ECS tasks to reach S3 over HTTPS through the S3 gateway endpoint prefix list.
+  ECR serves image layers from S3, so without this rule image pulls fail with
+  `CannotPullContainerError`.
+- `aws_vpc_security_group_egress_rule.ecs_tasks_to_https_via_nat`: defined only
+  when `create_private_egress_endpoints = false`; allows HTTPS to any address so
+  tasks can reach AWS APIs through an operator-provided NAT route.
 - `aws_vpc_security_group_ingress_rule.private_egress_endpoints_from_ecs_tasks`:
   allows HTTPS inbound to private VPC interface endpoints only from the ECS task
   security group.
@@ -195,7 +202,9 @@ ECS task log group, and private VPC endpoint resources:
   the ECS tasks security group only.
 - `aws_vpc_endpoint.s3`: gateway endpoint for S3 access through
   `private_route_table_ids`, needed for ECR layer/object access when using VPC
-  endpoints.
+  endpoints. A precondition fails the plan when `private_route_table_ids` is
+  empty, because an S3 gateway endpoint without routes cannot serve image
+  layers.
 - `aws_vpc_endpoint.interface`: interface endpoints for ECR API, ECR Docker,
   CloudWatch Logs, and Secrets Manager in `private_subnet_ids`, with private DNS
   enabled.
@@ -221,8 +230,8 @@ ECS task log group, and private VPC endpoint resources:
   complete `DATABASE_URL` value consumed by ECS tasks. Terraform does not create
   a secret version or store the value.
 - `aws_secretsmanager_secret.redis_url`: metadata-only placeholder for the
-  complete `redis://` `REDIS_URL` value consumed by ECS tasks. Terraform does
-  not create a secret version or store the value.
+  complete `redis://` or `rediss://` `REDIS_URL` value consumed by ECS tasks.
+  Terraform does not create a secret version or store the value.
 - `aws_secretsmanager_secret.webhook_secret`: metadata-only placeholder for
   `WEBHOOK_SECRET`. Terraform does not create a secret version or store the
   value.
@@ -289,6 +298,33 @@ require handling the generated RDS password; instead, an approved deployment
 step must populate the placeholder from the RDS endpoint, database name, and
 AWS-managed RDS master user secret outside git.
 
+Populate the `DATABASE_URL` secret as a plaintext value, not as a Secrets
+Manager key/value JSON document, in this form:
+
+```text
+postgresql://<username>:<percent-encoded-password>@<rds-endpoint>:5432/<db-name>?sslmode=verify-full&sslrootcert=<path-to-rds-ca-bundle>
+```
+
+- Percent-encode the password (for example with `encodeURIComponent`). RDS
+  generated passwords can contain characters such as `#`, `?`, or `%`.
+  Unencoded, `#` and `?` fail URL parsing at startup, `%` followed by
+  non-hex characters fails with `URI malformed`, and `%` followed by two hex
+  digits silently decodes into a different password.
+- RDS for PostgreSQL 15 and later rejects unencrypted connections by default
+  (`rds.force_ssl = 1`). The `pg` driver used here treats `sslmode=require` as
+  `verify-full`, so the Amazon RDS CA bundle must be trusted: either reference a
+  bundle file shipped in the image with `sslrootcert`, or set
+  `NODE_EXTRA_CA_CERTS` to it. The current image does not ship the bundle; add
+  it in an approved image change before the first live deployment.
+- The RDS-managed master user secret rotates on a schedule, while
+  `DATABASE_URL` is a static copy read only at task start. After each rotation
+  the copy stops working until it is re-populated and the services are
+  redeployed. For a short-lived run, record the rotation schedule in the
+  deployment timebox; a longer-lived environment should inject only the
+  `password` key of the managed secret and build the URL in the application.
+- Config validation reports a malformed URL without echoing its value, so a
+  wrongly formatted secret does not print the password into task logs.
+
 RDS uses `manage_master_user_password = true`, so Terraform does not take or
 store a plaintext database password. The AWS-managed master user secret ARN is
 exposed as a sensitive output for later wiring.
@@ -300,12 +336,13 @@ existing Redis security group rule. Redis backs BullMQ queue infrastructure; it
 is not the source of truth for accepted webhook work or payment state.
 
 Redis at-rest encryption defaults to enabled. Redis in-transit encryption
-defaults to disabled in this slice because the current application validation
-accepts only `redis://` URLs. Populate the `REDIS_URL` placeholder with a
-`redis://` URL built from the Redis primary endpoint and port. A production move
-to Redis TLS should first update client configuration and runtime validation
-for `rediss://`, then enable `redis_transit_encryption_enabled` during a
-reviewed infrastructure change.
+defaults to disabled in this no-apply scaffold. Populate the `REDIS_URL`
+placeholder with a `redis://` URL built from the Redis primary endpoint and
+port. The application accepts `rediss://` as well and passes it to the Redis
+client, which then connects over TLS; a move to Redis TLS enables
+`redis_transit_encryption_enabled` and switches the secret to `rediss://` in the
+same reviewed change. That TLS path has not been exercised against ElastiCache
+yet.
 
 The ECS task definitions include non-secret environment variables through base
 locals plus `app_environment_variables`; secret runtime values are injected
@@ -318,7 +355,9 @@ not a complete runnable deployment.
 The ECS services are defined in private subnets with `assign_public_ip = false`.
 The preferred private egress path is represented by VPC endpoints: ECR API, ECR
 Docker, CloudWatch Logs, and Secrets Manager interface endpoints, plus an S3
-gateway endpoint for ECR layer/object access. These resources are still
+gateway endpoint for ECR layer/object access. The ECS task security group allows
+HTTPS egress to the interface endpoint security group and to the S3 gateway
+endpoint prefix list. These resources are still
 scaffold only until approved existing VPC, private subnet, and private route
 table inputs are supplied and a live apply is explicitly approved. A NAT Gateway
 is not defined here and remains an explicit approval and cost-risk alternative.

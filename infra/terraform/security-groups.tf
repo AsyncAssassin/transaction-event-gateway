@@ -108,6 +108,33 @@ resource "aws_vpc_security_group_egress_rule" "ecs_tasks_to_private_egress_endpo
   description                  = "Allow ECS tasks to reach private VPC interface endpoints over HTTPS."
 }
 
+# ECR serves image layers from S3. With the S3 gateway endpoint that traffic
+# leaves the task ENI toward S3 addresses, so it needs its own egress rule to the
+# S3 prefix list; without it every task fails with CannotPullContainerError.
+resource "aws_vpc_security_group_egress_rule" "ecs_tasks_to_s3_gateway_endpoint" {
+  count = var.create_private_egress_endpoints ? 1 : 0
+
+  security_group_id = aws_security_group.ecs_tasks.id
+  prefix_list_id    = aws_vpc_endpoint.s3[0].prefix_list_id
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "Allow ECS tasks to fetch ECR image layers from S3 through the gateway endpoint."
+}
+
+# Without the private endpoint path, tasks reach ECR, CloudWatch Logs, Secrets
+# Manager, and S3 through an operator-provided NAT route over public HTTPS.
+resource "aws_vpc_security_group_egress_rule" "ecs_tasks_to_https_via_nat" {
+  count = var.create_private_egress_endpoints ? 0 : 1
+
+  security_group_id = aws_security_group.ecs_tasks.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "Allow ECS tasks to reach AWS APIs over HTTPS through an operator-provided NAT route."
+}
+
 resource "aws_vpc_security_group_ingress_rule" "private_egress_endpoints_from_ecs_tasks" {
   count = var.create_private_egress_endpoints ? 1 : 0
 

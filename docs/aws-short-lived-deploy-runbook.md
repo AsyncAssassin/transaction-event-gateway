@@ -108,7 +108,10 @@ should follow after separate live-deploy approval is granted.
 4. Approve private egress inputs for ECS image pulls, CloudWatch Logs, Secrets
    Manager access, and S3-backed ECR layer access.
 5. Approve runtime secret value population for `DATABASE_URL`, `REDIS_URL`, and
-   `WEBHOOK_SECRET` without committing secret values.
+   `WEBHOOK_SECRET` without committing secret values. `DATABASE_URL` follows the
+   format in [Terraform scaffold notes](../infra/terraform/README.md): a
+   percent-encoded password, TLS to RDS with the Amazon RDS CA bundle, and a
+   decision for the managed master password rotation schedule.
 6. Select the reviewed commit SHA, complete required checks, approve image
    publication, and capture the immutable image tag or digest through
    [ECR image publishing path](ecr-image-publishing.md).

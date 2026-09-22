@@ -148,7 +148,10 @@ Secrets Manager placeholders for `DATABASE_URL`, `REDIS_URL`, and
 `WEBHOOK_SECRET`, but Terraform does not create secret versions or store those
 values. A real deployment still needs approved secret population, with
 `DATABASE_URL` assembled from the RDS endpoint and AWS-managed master user
-secret outside git. The services run in private subnets with no public IPs; the
+secret outside git: the password must be percent-encoded, the connection must
+use TLS with the Amazon RDS CA bundle, and the managed password rotation needs
+a re-population plan (see [Terraform scaffold notes](infra/terraform/README.md)).
+The services run in private subnets with no public IPs; the
 Terraform scaffold defines the preferred VPC endpoint path, but a real
 deployment still needs approved VPC, subnet, and private route table inputs
 plus explicit apply approval before those endpoints exist. A NAT Gateway remains
