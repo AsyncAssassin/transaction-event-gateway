@@ -2,7 +2,10 @@ import {
   ArgumentsHost,
   BadRequestException,
   ConflictException,
+  InternalServerErrorException,
+  NotFoundException,
 } from '@nestjs/common';
+import { ThrottlerException } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 
 import { StructuredLogger } from '../logging/structured-logger';
@@ -145,23 +148,125 @@ describe('CorrelationIdExceptionFilter', () => {
     );
   });
 
-  it('maps body-parser style errors that carry their own status', () => {
+  it('replaces the default Nest 404 body of an unknown route with the NOT_FOUND envelope', () => {
     const { host, response } = createHost();
-    const error = Object.assign(new Error('request entity too large'), {
-      status: 413,
-      expose: true,
-    });
 
-    filter.catch(error, host);
+    filter.catch(new NotFoundException('Cannot GET /no-such-route'), host);
 
-    expect(response.status).toHaveBeenCalledWith(413);
+    expect(response.status).toHaveBeenCalledWith(404);
     expect(sentBody(response)).toEqual({
-      error: 'PAYLOAD_TOO_LARGE',
-      message: 'request entity too large',
+      error: 'NOT_FOUND',
+      message: 'Resource not found.',
+      correlationId: expect.stringMatching(uuidPattern),
+    });
+  });
+
+  it('maps the rate limiter exception to RATE_LIMITED without its framework text', () => {
+    const { host, response } = createHost();
+
+    filter.catch(new ThrottlerException(), host);
+
+    expect(response.status).toHaveBeenCalledWith(429);
+    expect(sentBody(response)).toEqual({
+      error: 'RATE_LIMITED',
+      message:
+        'Too many requests; retry after the delay in the Retry-After header.',
       correlationId: expect.stringMatching(uuidPattern),
     });
     expect(errorLog).not.toHaveBeenCalled();
   });
+
+  it('hides the default body of a Nest 5xx exception behind the generic 500 envelope', () => {
+    const { host, response } = createHost();
+
+    filter.catch(new InternalServerErrorException('pool exhausted'), host);
+
+    expect(response.status).toHaveBeenCalledWith(500);
+    expect(sentBody(response)).toEqual({
+      error: 'INTERNAL_SERVER_ERROR',
+      message: 'Unexpected server error.',
+      correlationId: expect.stringMatching(uuidPattern),
+    });
+  });
+
+  it.each([
+    [
+      'an oversized body',
+      Object.assign(new Error('request entity too large'), {
+        status: 413,
+        expose: true,
+        type: 'entity.too.large',
+      }),
+      413,
+      {
+        error: 'PAYLOAD_TOO_LARGE',
+        message: 'Request body exceeds the size limit.',
+      },
+    ],
+    [
+      'a gzip body that zlib cannot inflate',
+      Object.assign(new Error('incorrect header check'), {
+        status: 400,
+        expose: true,
+        code: 'Z_DATA_ERROR',
+      }),
+      400,
+      {
+        error: 'VALIDATION_ERROR',
+        message: 'Request could not be processed.',
+      },
+    ],
+    [
+      'an unsupported content encoding',
+      Object.assign(new Error('unsupported content encoding "x-custom"'), {
+        status: 415,
+        expose: true,
+        type: 'encoding.unsupported',
+      }),
+      415,
+      {
+        error: 'UNSUPPORTED_MEDIA_TYPE',
+        message: 'Request body encoding or charset is not supported.',
+      },
+    ],
+    [
+      'an unsupported charset',
+      Object.assign(new Error('unsupported charset "LATIN1"'), {
+        status: 415,
+        expose: true,
+        type: 'charset.unsupported',
+      }),
+      415,
+      {
+        error: 'UNSUPPORTED_MEDIA_TYPE',
+        message: 'Request body encoding or charset is not supported.',
+      },
+    ],
+    [
+      'a status without a dedicated envelope',
+      Object.assign(new Error('entity verify failed'), {
+        status: 403,
+        expose: true,
+      }),
+      403,
+      { error: 'HTTP_ERROR', message: 'Request could not be processed.' },
+    ],
+  ])(
+    'maps body parser errors for %s by status and never returns their message',
+    (_, error, status, envelope) => {
+      const { host, response } = createHost();
+
+      filter.catch(error, host);
+
+      expect(response.status).toHaveBeenCalledWith(status);
+      expect(sentBody(response)).toEqual({
+        ...envelope,
+        correlationId: expect.stringMatching(uuidPattern),
+      });
+      expect(JSON.stringify(sentBody(response))).not.toContain(error.message);
+      expect(errorLog).not.toHaveBeenCalled();
+    },
+  );
 
   it('hides unknown errors behind a generic 500 and logs a stable code when the message is one', () => {
     const { host, response } = createHost();

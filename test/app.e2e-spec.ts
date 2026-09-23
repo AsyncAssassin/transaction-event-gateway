@@ -117,6 +117,64 @@ describe('Health endpoints (e2e)', () => {
     expect(JSON.stringify(response.body)).not.toMatch(/SyntaxError|stack/);
   });
 
+  it('answers an unknown route with the NOT_FOUND envelope', async () => {
+    const responses = [
+      await request(app.getHttpServer()).get('/no-such-route').expect(404),
+      await request(app.getHttpServer())
+        .post('/no-such-route')
+        .send({})
+        .expect(404),
+    ];
+
+    for (const response of responses) {
+      expect(response.body).toEqual({
+        error: 'NOT_FOUND',
+        message: 'Resource not found.',
+        correlationId: response.headers['x-correlation-id'],
+      });
+    }
+  });
+
+  it('answers a gzip body that cannot be inflated with a generic 400', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/payment-intents')
+      .set('Content-Type', 'application/json')
+      .set('Content-Encoding', 'gzip')
+      .set('Idempotency-Key', 'broken-gzip')
+      .send(Buffer.from('not-a-gzip-stream'))
+      .expect(400);
+
+    expect(response.body).toEqual({
+      error: 'VALIDATION_ERROR',
+      message: 'Request could not be processed.',
+      correlationId: response.headers['x-correlation-id'],
+    });
+  });
+
+  it.each([
+    [
+      'an unsupported Content-Encoding',
+      { 'Content-Type': 'application/json', 'Content-Encoding': 'x-custom' },
+    ],
+    [
+      'a charset that is not a UTF encoding',
+      { 'Content-Type': 'application/json; charset=latin1' },
+    ],
+  ])('answers %s with 415 UNSUPPORTED_MEDIA_TYPE', async (_, headers) => {
+    const response = await request(app.getHttpServer())
+      .post('/payment-intents')
+      .set(headers)
+      .set('Idempotency-Key', 'unsupported-media-type')
+      .send('{}')
+      .expect(415);
+
+    expect(response.body).toEqual({
+      error: 'UNSUPPORTED_MEDIA_TYPE',
+      message: 'Request body encoding or charset is not supported.',
+      correlationId: response.headers['x-correlation-id'],
+    });
+  });
+
   it('accepts JSON below the explicit parser limit', async () => {
     const response = await request(app.getHttpServer())
       .post('/payment-intents')

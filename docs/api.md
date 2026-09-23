@@ -24,7 +24,7 @@ The service accepts an inbound `X-Correlation-ID` of up to 255 visible ASCII cha
 
 ## Error Response Shape
 
-Use a stable error envelope:
+Every error response uses one envelope:
 
 ```json
 {
@@ -41,6 +41,19 @@ Use a stable error envelope:
 ```
 
 `details` is optional and lists field paths with constraint messages; it does not include secrets, webhook signatures, or raw payloads.
+
+### Errors on Every Endpoint
+
+Any endpoint can return these errors. Except for the 500, the HTTP layer returns them before the request reaches its handler. Their messages are fixed texts: framework, body parser, and decompression messages are not returned.
+
+| Status | Error code | Case |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Malformed JSON, a compressed body that cannot be decompressed, or a body that breaks the [request body rules](#request-body-rules) |
+| 404 | `NOT_FOUND` | No route matches the method and path |
+| 413 | `PAYLOAD_TOO_LARGE` | The body exceeds the size limit |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | A `Content-Encoding` other than `gzip`, `deflate`, `br`, or `identity`, or a charset that is not a UTF encoding |
+| 429 | `RATE_LIMITED` | More than `RATE_LIMIT_LIMIT` requests to one route from one client address within `RATE_LIMIT_TTL_SECONDS`; `Retry-After` gives the seconds to wait. Health endpoints are not limited |
+| 500 | `INTERNAL_SERVER_ERROR` | An unexpected error; only the log records its cause |
 
 ## Request Body Rules
 
@@ -134,6 +147,8 @@ Content-Type: application/json
 - Invalid values return `400 Bad Request` with `VALIDATION_ERROR` and field-level `details`.
 
 ### Error Responses
+
+In addition to the [errors on every endpoint](#errors-on-every-endpoint):
 
 | Status | Error code | Case |
 | --- | --- | --- |
@@ -256,6 +271,8 @@ The payload is not persisted and no outbox event is created when signature valid
 - `reference` is not part of the signed webhook body; unknown fields are rejected by DTO validation before worker processing.
 
 ### Error Responses
+
+In addition to the [errors on every endpoint](#errors-on-every-endpoint):
 
 | Status | Error code | Case |
 | --- | --- | --- |

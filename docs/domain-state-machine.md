@@ -138,4 +138,4 @@ A row is due for dispatch when `dead_at` is null and it is `PENDING`, or `FAILED
 | Payment intent request with a missing `Idempotency-Key` or an invalid or oversized body | 400 or 413 | None |
 | Payment intent request with a known key and the same body | 200 with `Idempotent-Replayed: true` | None |
 | Payment intent request with a known key and a different body | 409 `IDEMPOTENCY_CONFLICT` | None |
-| Any request over the rate limit | 429 | None |
+| Any request over the rate limit | 429 `RATE_LIMITED` | None |

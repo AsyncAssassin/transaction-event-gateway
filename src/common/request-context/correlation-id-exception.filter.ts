@@ -12,7 +12,6 @@ import {
   isDatabaseUnavailableError,
 } from '../errors/database-error';
 import { describeError } from '../errors/describe-error';
-import { sanitizeErrorMessage } from '../errors/sanitize-error';
 import {
   isSafeErrorCode,
   StructuredLogger,
@@ -27,6 +26,39 @@ type ResolvedError = {
   status: number;
   body: Record<string, unknown>;
   dataExceptionCode?: string;
+};
+
+type ErrorEnvelope = {
+  error: string;
+  message: string;
+};
+
+// Envelopes for errors whose own text must not reach the client: Nest's
+// defaults ("Cannot GET /x", "ThrottlerException: Too Many Requests"), and
+// body parser and zlib messages, which describe parser internals or echo
+// request headers.
+const STATUS_ERROR_ENVELOPES: Readonly<Record<number, ErrorEnvelope>> = {
+  [HttpStatus.BAD_REQUEST]: {
+    error: 'VALIDATION_ERROR',
+    message: 'Request could not be processed.',
+  },
+  [HttpStatus.NOT_FOUND]: {
+    error: 'NOT_FOUND',
+    message: 'Resource not found.',
+  },
+  [HttpStatus.PAYLOAD_TOO_LARGE]: {
+    error: 'PAYLOAD_TOO_LARGE',
+    message: 'Request body exceeds the size limit.',
+  },
+  [HttpStatus.UNSUPPORTED_MEDIA_TYPE]: {
+    error: 'UNSUPPORTED_MEDIA_TYPE',
+    message: 'Request body encoding or charset is not supported.',
+  },
+  [HttpStatus.TOO_MANY_REQUESTS]: {
+    error: 'RATE_LIMITED',
+    message:
+      'Too many requests; retry after the delay in the Retry-After header.',
+  },
 };
 
 @Catch()
@@ -66,22 +98,15 @@ export class CorrelationIdExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       const exceptionResponse = exception.getResponse();
-      const body: Record<string, unknown> =
-        typeof exceptionResponse === 'object' && exceptionResponse !== null
-          ? { ...(exceptionResponse as Record<string, unknown>) }
-          : { error: 'HTTP_ERROR', message: exceptionResponse };
 
-      if (isDefaultBadRequestBody(status, body)) {
-        return {
-          status,
-          body: {
-            error: 'VALIDATION_ERROR',
-            message: 'Request could not be processed.',
-          },
-        };
-      }
-
-      return { status, body };
+      // Application exceptions already carry the error envelope; Nest's own
+      // exceptions carry framework text and get the envelope for their status.
+      return {
+        status,
+        body: isErrorEnvelope(exceptionResponse)
+          ? { ...exceptionResponse }
+          : envelopeForStatus(status),
+      };
     }
 
     if (isDatabaseUnavailableError(exception)) {
@@ -110,10 +135,7 @@ export class CorrelationIdExceptionFilter implements ExceptionFilter {
     if (httpErrorStatus !== null) {
       return {
         status: httpErrorStatus,
-        body: {
-          error: mapHttpErrorCode(httpErrorStatus),
-          message: httpErrorMessage(exception, httpErrorStatus),
-        },
+        body: envelopeForStatus(httpErrorStatus),
       };
     }
 
@@ -156,15 +178,30 @@ function resolveCorrelationId(request: Request, response: Response): string {
     .correlationId;
 }
 
-function isDefaultBadRequestBody(
-  status: number,
-  body: Record<string, unknown>,
-): boolean {
+function isErrorEnvelope(
+  value: unknown,
+): value is ErrorEnvelope & Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const candidate = value as { error?: unknown; message?: unknown };
+
   return (
-    status === HttpStatus.BAD_REQUEST &&
-    body.statusCode === HttpStatus.BAD_REQUEST &&
-    body.error === 'Bad Request'
+    isSafeErrorCode(candidate.error) && typeof candidate.message === 'string'
   );
+}
+
+function envelopeForStatus(status: number): ErrorEnvelope {
+  const envelope = STATUS_ERROR_ENVELOPES[status];
+
+  if (envelope) {
+    return { ...envelope };
+  }
+
+  return status >= HttpStatus.INTERNAL_SERVER_ERROR
+    ? { error: 'INTERNAL_SERVER_ERROR', message: 'Unexpected server error.' }
+    : { error: 'HTTP_ERROR', message: 'Request could not be processed.' };
 }
 
 function extractHttpErrorStatus(exception: unknown): number | null {
@@ -185,32 +222,4 @@ function extractHttpErrorStatus(exception: unknown): number | null {
   }
 
   return status;
-}
-
-function mapHttpErrorCode(status: number): string {
-  if (status === HttpStatus.PAYLOAD_TOO_LARGE) {
-    return 'PAYLOAD_TOO_LARGE';
-  }
-  if (status === HttpStatus.BAD_REQUEST) {
-    return 'VALIDATION_ERROR';
-  }
-  if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
-    return 'INTERNAL_SERVER_ERROR';
-  }
-  return 'HTTP_ERROR';
-}
-
-function httpErrorMessage(exception: unknown, status: number): string {
-  const exposed =
-    exception !== null &&
-    typeof exception === 'object' &&
-    (exception as { expose?: unknown }).expose === true;
-
-  if (exposed) {
-    return sanitizeErrorMessage(exception, 'Request could not be processed.');
-  }
-
-  return status >= HttpStatus.INTERNAL_SERVER_ERROR
-    ? 'Unexpected server error.'
-    : 'Request could not be processed.';
 }
