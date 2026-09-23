@@ -314,7 +314,7 @@ export class WebhookEventsService {
     });
 
     if (existingEvent) {
-      if (existingEvent.payloadHash === payloadHash) {
+      if (hasSamePayload(existingEvent, payloadHash)) {
         return {
           eventId,
           status: 'ALREADY_ACCEPTED',
@@ -385,6 +385,29 @@ export class WebhookEventsService {
 
     return payload as BlockchainWebhookJsonPayload;
   }
+}
+
+// Events stored before transaction hashes were normalized keep a payload hash
+// over the hash as it was sent, so their payload is compared in normalized form.
+function hasSamePayload(
+  existingEvent: WebhookEventEntity,
+  payloadHash: string,
+): boolean {
+  if (existingEvent.payloadHash === payloadHash) {
+    return true;
+  }
+
+  const storedTxHash = existingEvent.payload.txHash;
+  if (typeof storedTxHash !== 'string') {
+    return false;
+  }
+
+  const normalizedPayload = {
+    ...existingEvent.payload,
+    txHash: normalizeTxHash(storedTxHash),
+  };
+
+  return hashCanonicalJson(normalizedPayload as JsonValue) === payloadHash;
 }
 
 function extractExternalEventId(body: unknown): string | undefined {

@@ -448,6 +448,26 @@ describe('Webhook event processor (e2e)', () => {
     });
   });
 
+  it('accepts its own transaction again for an intent confirmed before hashes were normalized', async () => {
+    const paymentIntentId = await insertPaymentIntent(dataSource, {
+      status: PaymentIntentStatus.Confirmed,
+      confirmedTxHash: ' 0xABCDEF09 ',
+    });
+    const webhookEventId = await insertWebhookEvent(dataSource, {
+      paymentIntentId,
+      txHash: '0xabcdef09',
+    });
+
+    await expect(
+      processor.processWebhookEvent({ webhookEventId }),
+    ).resolves.toEqual({ status: 'processed' });
+
+    await expectPaymentIntent(dataSource, paymentIntentId, {
+      status: 'CONFIRMED',
+      confirmedTxHash: ' 0xABCDEF09 ',
+    });
+  });
+
   it('rolls back and leaves state unchanged when the transaction throws before commit', async () => {
     const paymentIntentId = await insertPaymentIntent(dataSource);
     const webhookEventId = await insertWebhookEvent(dataSource, {
