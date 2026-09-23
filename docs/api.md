@@ -362,7 +362,7 @@ Rules:
 
 ## Manual Retry
 
-There is no retry endpoint. The worker re-queues a webhook event that is still `QUEUED` 10 minutes after its job was published; operators can re-drive one sooner with SQL, see [Re-drive a stuck webhook event](runbook.md#re-drive-a-stuck-webhook-event).
+There is no retry endpoint. The worker re-queues a webhook event that is still `QUEUED` 10 minutes after its job was published; operators can re-drive one sooner with SQL, see [Re-drive a stuck webhook event](runbook.md#re-drive-a-stuck-webhook-event). A `FAILED` event is final and only an operator re-drives it, see [Re-drive a `FAILED` webhook event](runbook.md#re-drive-a-failed-webhook-event).
 
 ## OpenAPI
 

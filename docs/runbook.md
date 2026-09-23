@@ -170,6 +170,18 @@ docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "UPD
 - Read the latest `webhook_processing_attempts.error_message`.
 - Compare the webhook payload against the referenced `payment_intents` row for amount, asset, current status, and transaction hash. `reference` is not part of the signed webhook DTO; unknown `reference` fields are rejected before worker processing.
 
+A later job for a `FAILED` event records another `FAILED` attempt with the same reason and changes nothing, even if the payment intent has changed since.
+
+### Re-drive a `FAILED` webhook event
+
+When the cause of a failure is gone, for example the payment intent that the webhook named has been created since, set the event back to `RECEIVED` and make its outbox row due. The dispatcher publishes a job within a second, and the worker applies the rules to the current payment intent.
+
+```bash
+docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "BEGIN; UPDATE webhook_events SET status = 'RECEIVED', failure_reason = NULL, processed_at = NULL, updated_at = now() WHERE id = '<webhook_event_id>' AND status = 'FAILED'; UPDATE outbox_events SET status = 'FAILED', next_attempt_at = now(), dead_at = NULL, last_error = 'MANUAL_REDRIVE', updated_at = now() WHERE aggregate_type = 'webhook_event' AND aggregate_id = '<webhook_event_id>'; COMMIT;"
+```
+
+The previous attempts stay in `webhook_processing_attempts`.
+
 ### Transaction hash that confirmed several payment intents
 
 Transaction hashes are stored and compared in canonical form. Before that, one transaction could confirm several payment intents when the provider spelled its hash differently, for example in another letter case. The migration `NormalizeConfirmedTxHashes` leaves such rows as they are; list them with:

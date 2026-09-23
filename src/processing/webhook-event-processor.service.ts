@@ -31,6 +31,10 @@ type ProcessingResult =
   | {
       status: 'failed';
       reason: ProcessingFailureReason;
+    }
+  | {
+      status: 'already_failed';
+      reason: string | null;
     };
 
 type ProcessingFailureReason =
@@ -67,6 +71,25 @@ export class WebhookEventProcessorService {
         });
 
         return { status: 'already_processed' };
+      }
+
+      // FAILED is final as well: a later job, such as one published twice,
+      // must not apply the rules again to a payment intent that has changed
+      // since. An operator re-drives a FAILED event deliberately.
+      if (webhookEvent.status === WebhookEventStatus.Failed) {
+        await this.insertAttempt(manager, {
+          webhookEventId: webhookEvent.id,
+          jobId: input.jobId ?? null,
+          status: WebhookProcessingAttemptStatus.Failed,
+          errorMessage: webhookEvent.failureReason,
+          startedAt,
+          finishedAt: new Date(),
+        });
+
+        return {
+          status: 'already_failed',
+          reason: webhookEvent.failureReason,
+        };
       }
 
       webhookEvent.status = WebhookEventStatus.Processing;

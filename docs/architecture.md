@@ -150,8 +150,8 @@ sequenceDiagram
     Q->>W: process-webhook-event with webhookEventId
     W->>DB: BEGIN
     W->>DB: SELECT webhook_events FOR UPDATE
-    alt already PROCESSED
-        W->>DB: INSERT attempt as SUCCEEDED
+    alt already PROCESSED or FAILED
+        W->>DB: INSERT attempt with the stored outcome
     else any other status
         W->>DB: UPDATE webhook_events SET PROCESSING
         W->>W: check event type and transaction hash
@@ -164,7 +164,7 @@ sequenceDiagram
     W-->>Q: job completed
 ```
 
-A domain failure (unknown payment intent, amount or asset mismatch, and so on) is a normal result: the webhook becomes `FAILED` with a reason and the job completes. An exception, such as a lost database connection, rolls back the whole transaction, including the attempt row, and fails the BullMQ attempt. Jobs use `attempts: 5` with exponential backoff from 5 s (5, 10, 20 and 40 s between attempts), so the fifth attempt fails about 75 seconds after the first; the webhook is then still `QUEUED` and reconciliation picks it up. Redis keeps completed jobs for up to one hour (at most 1,000) and failed jobs for up to seven days (at most 5,000).
+A domain failure (unknown payment intent, amount or asset mismatch, and so on) is a normal result: the webhook becomes `FAILED` with a reason and the job completes. `PROCESSED` and `FAILED` are final, so a later job for the same event only records an attempt. An exception, such as a lost database connection, rolls back the whole transaction, including the attempt row, and fails the BullMQ attempt. Jobs use `attempts: 5` with exponential backoff from 5 s (5, 10, 20 and 40 s between attempts), so the fifth attempt fails about 75 seconds after the first; the webhook is then still `QUEUED` and reconciliation picks it up. Redis keeps completed jobs for up to one hour (at most 1,000) and failed jobs for up to seven days (at most 5,000).
 
 Payment intents are created as `CREATED`, and the worker moves them to `CONFIRMED`. `PROCESSING`, `FAILED` and `EXPIRED` exist in the enum, but no code path writes them. The order of checks and every failure reason are in [domain-state-machine.md](domain-state-machine.md).
 

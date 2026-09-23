@@ -138,6 +138,11 @@ export class WebhookEventsWorkerService
       jobId: normalizeJobId(job.id),
       webhookEventId: job.data.webhookEventId,
       status: result.status.toUpperCase(),
+      // A later job for a FAILED event changes nothing and keeps its reason.
+      errorCode:
+        result.status === 'already_failed'
+          ? (result.reason ?? undefined)
+          : undefined,
     });
   }
 
