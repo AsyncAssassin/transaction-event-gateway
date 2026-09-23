@@ -1,10 +1,10 @@
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 import { AppModule } from './app.module';
 import { configureHttpApp } from './common/bootstrap';
+import { setupOpenApi } from './common/openapi/openapi';
 
 function isSwaggerEnabled(): boolean {
   if (process.env.NODE_ENV !== 'production') {
@@ -23,18 +23,7 @@ async function bootstrap(): Promise<void> {
   configureHttpApp(app);
 
   if (isSwaggerEnabled()) {
-    const swaggerConfig = new DocumentBuilder()
-      .setTitle('transaction-event-gateway')
-      .setDescription(
-        'HTTP API documentation for the transaction event gateway service. ' +
-          'Webhook signatures are computed over the raw request body, not over parsed JSON.',
-      )
-      .setVersion('0.1.0')
-      .build();
-    const document = SwaggerModule.createDocument(app, swaggerConfig);
-    SwaggerModule.setup('docs', app, document, {
-      jsonDocumentUrl: 'docs/openapi.json',
-    });
+    setupOpenApi(app);
   }
 
   const port = Number(process.env.PORT ?? 3000);
