@@ -52,7 +52,7 @@ npm run test:e2e
 - Webhook security helpers: HMAC over timestamp, nonce and raw body; rejection of a changed body and of malformed headers; timestamp format and tolerance.
 - Canonical JSON: stable key order, equal hashes for logically equal objects, preserved array order.
 - Amount formatting (`src/payment-intents/payment-amount.spec.ts`): the canonical form of submitted and stored `numeric(36,18)` amounts.
-- Logging: the field allow-list, stable error codes instead of free-form messages, a numeric `suppressedCount`, and the log throttle.
+- Logging: the field allow-list, stable error codes instead of free-form messages, a numeric `suppressedCount`, and the log throttle; `src/common/logging/app-logger.spec.ts` covers the choice of format from `LOG_FORMAT` and `NODE_ENV`, JSON lines with event fields at the top level, errors with their stack on stderr, and the text format.
 - Request context and exception filter: accepted, generated and replaced correlation IDs; a generic 400 for parser errors; 503 for PostgreSQL connection failures; the envelope for Nest's default 404 and 5xx bodies and for the rate limiter's 429; body parser and zlib errors mapped by status (400, 413, 415) without their messages; a generic 500 that logs only stable codes.
 - Database error classification: connection-class SQLSTATEs and socket errors count as unavailable; integrity violations, syntax errors and statement timeouts do not.
 - Configuration: URL validation that does not echo credentials, and the rate limiting options.

@@ -103,6 +103,7 @@ All three task definitions receive the same non-secret environment from `ecs-tas
 | Variable | Value in the task definitions |
 | --- | --- |
 | `NODE_ENV` | `production` |
+| `LOG_FORMAT` | `json` |
 | `PORT` | `app_port` (default `3000`) |
 | `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS` | `300` |
 | `OUTBOX_DISPATCH_ENABLED` | `true` |
@@ -164,7 +165,7 @@ CI runs the code, Docker, and Terraform checks but has no AWS access. A deploy p
 Provided by the scaffold and the application:
 
 - Log groups `/ecs/<name_prefix>/api`, `/ecs/<name_prefix>/worker`, and `/ecs/<name_prefix>/migration`, kept for `ecs_log_retention_days` (default 30).
-- Structured log events with correlation IDs and safe identifiers. Nest's console logger prints each one as a prefix followed by the JSON event, with ANSI color codes unless `NO_COLOR` is set.
+- Structured log events with correlation IDs and safe identifiers, one JSON object per line (`LOG_FORMAT=json`), so CloudWatch Logs filter patterns can match fields such as `{ $.event = "worker_job_processed" }`.
 - ALB health checks on `/health/serving` every 30 seconds; two consecutive failures mark a task unhealthy.
 - ECS service events and stopped-task reasons.
 

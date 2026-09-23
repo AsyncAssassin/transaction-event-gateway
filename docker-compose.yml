@@ -18,6 +18,7 @@ services:
     command: ["node", "dist/main.js"]
     environment:
       NODE_ENV: development
+      LOG_FORMAT: json
       PORT: 3000
       DATABASE_URL: postgres://app:app@postgres:5432/transaction_event_gateway
       REDIS_URL: redis://redis:6379
@@ -41,6 +42,7 @@ services:
     command: ["node", "dist/worker.js"]
     environment:
       NODE_ENV: development
+      LOG_FORMAT: json
       PORT: 3000
       DATABASE_URL: postgres://app:app@postgres:5432/transaction_event_gateway
       REDIS_URL: redis://redis:6379
