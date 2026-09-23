@@ -1,10 +1,15 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { Server } from 'node:http';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
 
 import { AppModule } from '../src/app.module';
-import { configureHttpApp } from '../src/common/bootstrap';
+import {
+  configureHttpApp,
+  HEADERS_TIMEOUT_MS,
+  KEEP_ALIVE_TIMEOUT_MS,
+} from '../src/common/bootstrap';
 import { POSTGRES_HEALTH_APPLICATION_NAME } from '../src/health/postgres-health-check.service';
 
 const uuidPattern =
@@ -37,6 +42,31 @@ describe('Health endpoints (e2e)', () => {
     expect(response.body).toMatchObject({
       status: 'ok',
     });
+  });
+
+  it('does not send an X-Powered-By header', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/health/live')
+      .expect(200);
+
+    expect(response.headers['x-powered-by']).toBeUndefined();
+  });
+
+  it('keeps idle connections open longer than the load balancer idle timeout of 60 s', async () => {
+    const server = app.getHttpServer() as Server;
+    expect(KEEP_ALIVE_TIMEOUT_MS).toBeGreaterThan(60_000);
+    expect(HEADERS_TIMEOUT_MS).toBeGreaterThan(KEEP_ALIVE_TIMEOUT_MS);
+    expect(server.keepAliveTimeout).toBe(KEEP_ALIVE_TIMEOUT_MS);
+    expect(server.headersTimeout).toBe(HEADERS_TIMEOUT_MS);
+
+    const response = await request(server)
+      .get('/health/live')
+      .set('Connection', 'keep-alive')
+      .expect(200);
+
+    expect(response.headers['keep-alive']).toBe(
+      `timeout=${KEEP_ALIVE_TIMEOUT_MS / 1_000}`,
+    );
   });
 
   it('returns a provided correlation ID', async () => {
