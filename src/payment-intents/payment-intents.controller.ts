@@ -2,7 +2,10 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   Headers,
+  Param,
+  ParseUUIDPipe,
   Post,
   Res,
 } from '@nestjs/common';
@@ -11,6 +14,7 @@ import {
   ApiConflictResponse,
   ApiCreatedResponse,
   ApiHeader,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -70,6 +74,31 @@ export class PaymentIntentsController {
     }
 
     return result.body;
+  }
+
+  @Get(':id')
+  @ApiOperation({
+    operationId: 'getPaymentIntent',
+    summary: 'Get the current state of a payment intent',
+  })
+  @ApiOkResponse({ description: 'Payment intent found.' })
+  @ApiBadRequestResponse({ description: 'The ID is not a UUID.' })
+  @ApiNotFoundResponse({ description: 'No payment intent has this ID.' })
+  getPaymentIntent(
+    @Param(
+      'id',
+      new ParseUUIDPipe({
+        exceptionFactory: () =>
+          new BadRequestException({
+            error: 'VALIDATION_ERROR',
+            message: 'Request validation failed.',
+            details: [{ field: 'id', message: 'id must be a UUID' }],
+          }),
+      }),
+    )
+    id: string,
+  ): Promise<PaymentIntentResponse> {
+    return this.paymentIntentsService.getPaymentIntent(id);
   }
 
   private validateIdempotencyKey(idempotencyKey: string | undefined): string {

@@ -45,7 +45,7 @@ known limitation before real multi-client traffic.
 
 ## Database Inspection
 
-All commands below target the local Docker Compose PostgreSQL service.
+All commands below target the local Docker Compose PostgreSQL service. The state of a single payment intent is also available from the API: `curl http://localhost:3000/payment-intents/<id>`.
 
 Recent payment intents:
 

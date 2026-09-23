@@ -2,7 +2,7 @@
 
 ## Overview
 
-The API exposes payment intent creation and signed blockchain webhook acceptance for the MVP backend service. PostgreSQL remains the durable source of truth for idempotency, webhook inbox records, and processing state. Redis/BullMQ is used only after accepted webhook events are durably written through the outbox flow.
+The API exposes payment intent creation and reads, and signed blockchain webhook acceptance, for the MVP backend service. PostgreSQL remains the durable source of truth for idempotency, webhook inbox records, and processing state. Redis/BullMQ is used only after accepted webhook events are durably written through the outbox flow.
 
 All request and response bodies use JSON. All timestamps in responses are ISO 8601 UTC strings.
 
@@ -66,6 +66,37 @@ Every endpoint parses JSON bodies up to 256 KB (`413 PAYLOAD_TOO_LARGE` above th
 
 If PostgreSQL still rejects a submitted value as invalid data (SQLSTATE class 22), the response is also `400 VALIDATION_ERROR`.
 
+## Payment Intent Resource
+
+`POST /payment-intents` and `GET /payment-intents/{id}` return the same representation:
+
+```json
+{
+  "id": "5f70a0c2-7bb5-4545-b181-3fcff9b56b86",
+  "status": "CONFIRMED",
+  "amount": "125.5",
+  "asset": "USDC",
+  "destination": "wallet_test_123",
+  "reference": "order-1001",
+  "clientRequestId": "checkout-1001",
+  "confirmedTxHash": "0xtest123",
+  "createdAt": "2026-06-19T10:00:00.000Z",
+  "updatedAt": "2026-06-19T10:00:02.000Z"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | UUID assigned at creation. |
+| `status` | `CREATED` until the worker applies a matching confirmed webhook, then `CONFIRMED`; see the [domain state machine](domain-state-machine.md#payment-intent). |
+| `amount` | Decimal string in canonical form, without leading zeros or trailing fractional zeros: `"125.50"` is returned as `"125.5"` and `"100.00"` as `"100"`. |
+| `asset`, `destination` | As sent at creation. |
+| `reference`, `clientRequestId` | As sent at creation, or `null` when omitted. |
+| `confirmedTxHash` | Transaction hash of the webhook that confirmed the intent; `null` before confirmation. |
+| `createdAt`, `updatedAt` | ISO 8601 UTC timestamps; `updatedAt` changes when the worker confirms the intent. |
+
+`metadata` is stored with the intent but not returned.
+
 ## POST /payment-intents
 
 Creates a payment intent idempotently.
@@ -94,18 +125,20 @@ Idempotency-Key: 01JABCEXAMPLE
 
 ### Success Response
 
-`201 Created`
+`201 Created` with the [payment intent resource](#payment-intent-resource):
 
 ```json
 {
   "id": "5f70a0c2-7bb5-4545-b181-3fcff9b56b86",
   "status": "CREATED",
-  "amount": "125.50",
+  "amount": "125.5",
   "asset": "USDC",
   "destination": "wallet_test_123",
   "reference": "order-1001",
   "clientRequestId": "checkout-1001",
-  "createdAt": "2026-06-19T10:00:00.000Z"
+  "confirmedTxHash": null,
+  "createdAt": "2026-06-19T10:00:00.000Z",
+  "updatedAt": "2026-06-19T10:00:00.000Z"
 }
 ```
 
@@ -123,14 +156,18 @@ Content-Type: application/json
 {
   "id": "5f70a0c2-7bb5-4545-b181-3fcff9b56b86",
   "status": "CREATED",
-  "amount": "125.50",
+  "amount": "125.5",
   "asset": "USDC",
   "destination": "wallet_test_123",
   "reference": "order-1001",
   "clientRequestId": "checkout-1001",
-  "createdAt": "2026-06-19T10:00:00.000Z"
+  "confirmedTxHash": null,
+  "createdAt": "2026-06-19T10:00:00.000Z",
+  "updatedAt": "2026-06-19T10:00:00.000Z"
 }
 ```
+
+The replay returns the response stored at creation, not the current state; read the current state with [`GET /payment-intents/{id}`](#get-payment-intentsid).
 
 ### Validation Rules
 
@@ -184,7 +221,31 @@ Rules:
 - The response snapshot must be stored before the transaction commits.
 - Idempotency correctness must not depend on Redis, in-memory locks, or queue uniqueness.
 - Idempotency keys share one global scope (`payment-intents:create`) because the MVP has no authentication or tenancy. Two unrelated callers that reuse the same key with the same payload receive the same stored response, and with a different payload receive `409`. Isolating keys per caller is future work tied to authentication.
-- The request hash is a byte-exact canonicalization (sorted keys) of the logical payload. Numeric strings are not normalized: reusing a key with `"125.50"` and then `"125.5"` is a `409` conflict, so a retried request must send a byte-stable body.
+- The request hash is a byte-exact canonicalization (sorted keys) of the logical payload. Numeric strings are not normalized: reusing a key with `"125.50"` and then `"125.5"` is a `409` conflict, although both responses show `"125.5"`, so a retried request must send a byte-stable body.
+
+## GET /payment-intents/{id}
+
+Returns the current state of a payment intent, including the confirmation applied by the worker.
+
+### Request
+
+```http
+GET /payment-intents/5f70a0c2-7bb5-4545-b181-3fcff9b56b86
+```
+
+### Success Response
+
+`200 OK` with the [payment intent resource](#payment-intent-resource). After the worker has applied a matching `transaction.confirmed` webhook, `status` is `CONFIRMED` and `confirmedTxHash` holds its transaction hash.
+
+### Error Responses
+
+In addition to the [errors on every endpoint](#errors-on-every-endpoint):
+
+| Status | Error code | Case |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | `id` is not a UUID |
+| 404 | `NOT_FOUND` | No payment intent has this ID |
+| 503 | `SERVICE_UNAVAILABLE` | PostgreSQL is unavailable |
 
 ## POST /webhooks/blockchain
 

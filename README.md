@@ -29,6 +29,7 @@ Production-style NestJS backend for idempotent payment intents, signed webhook i
 ## Implemented Features
 
 - Idempotent `POST /payment-intents` with `Idempotency-Key`, canonical request hashing, response snapshots, and conflict detection.
+- `GET /payment-intents/{id}` with the current status and the confirming transaction hash.
 - Signed `POST /webhooks/blockchain` acceptance with timestamp tolerance, nonce replay protection, and HMAC validation over the raw request body.
 - PostgreSQL schema and migrations for payment intents, idempotency records, webhook inbox rows, outbox rows, and processing attempts.
 - Transactional outbox between webhook acceptance and BullMQ publication.
@@ -287,6 +288,31 @@ Accepted response:
 
 A duplicate webhook with the same event ID and payload returns `202 Accepted` with `ALREADY_ACCEPTED`.
 
+### Read a payment intent
+
+Once the worker has processed the webhook, the payment intent shows the confirmation:
+
+```bash
+curl -i http://localhost:3000/payment-intents/<PAYMENT_INTENT_UUID>
+```
+
+```json
+{
+  "id": "<PAYMENT_INTENT_UUID>",
+  "status": "CONFIRMED",
+  "amount": "125.5",
+  "asset": "USDC",
+  "destination": "wallet_test_123",
+  "reference": "order-1001",
+  "clientRequestId": "checkout-1001",
+  "confirmedTxHash": "0xtest123",
+  "createdAt": "2026-09-23T10:00:00.000Z",
+  "updatedAt": "2026-09-23T10:00:02.000Z"
+}
+```
+
+`POST /payment-intents` returns the same fields, with `status` `CREATED` and `confirmedTxHash` `null`. Amounts come back in canonical form, so `"125.50"` is returned as `"125.5"`. An unknown ID returns `404 NOT_FOUND`.
+
 ## Worker and Outbox Behavior
 
 Webhook acceptance writes a `webhook_events` inbox row and an `outbox_events` row only. It does not publish directly to BullMQ.
@@ -365,7 +391,7 @@ Then run:
 npm run smoke:local
 ```
 
-The smoke script checks health, OpenAPI, payment intent idempotency, signed webhook acceptance, duplicate webhook handling, signature and timestamp rejection, outbox publication, worker processing, and final PostgreSQL state. It reads PostgreSQL and Redis through the local Compose containers, so `SMOKE_BASE_URL` can point it at another local API but not at a deployed one; deployed checks are in the [AWS deployment runbook](docs/aws-deployment-runbook.md).
+The smoke script checks health, OpenAPI, payment intent idempotency, signed webhook acceptance, duplicate webhook handling, signature and timestamp rejection, outbox publication, worker processing, final PostgreSQL state, and the confirmed payment intent returned by `GET /payment-intents/{id}`. It reads PostgreSQL and Redis through the local Compose containers, so `SMOKE_BASE_URL` can point it at another local API but not at a deployed one; deployed checks are in the [AWS deployment runbook](docs/aws-deployment-runbook.md).
 
 ## Failure Modes
 
@@ -387,7 +413,7 @@ The smoke script checks health, OpenAPI, payment intent idempotency, signed webh
 
 ## Project Status
 
-MVP backend functionality is implemented locally: payment intent creation, idempotency, signed webhook acceptance, PostgreSQL schema and migrations, transactional outbox, BullMQ worker processing, structured logging, correlation IDs, and health/readiness endpoints.
+MVP backend functionality is implemented locally: payment intent creation and reads, idempotency, signed webhook acceptance, PostgreSQL schema and migrations, transactional outbox, BullMQ worker processing, structured logging, correlation IDs, and health/readiness endpoints.
 
 Manual retry endpoint, metrics dashboards, authentication, authorization, and real provider integrations are intentional future extensions.
 
