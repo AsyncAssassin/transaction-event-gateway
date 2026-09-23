@@ -269,6 +269,7 @@ request POST /payment-intents 201 "$TMP_DIR/payment-create.json" "$TMP_DIR/payme
   --data "$PAYMENT_BODY"
 
 assert_json_field "$TMP_DIR/payment-create.json" status CREATED
+assert_json_field "$TMP_DIR/payment-create.json" amount 125.5
 PAYMENT_INTENT_ID="$(extract_json_string "$TMP_DIR/payment-create.json" id)"
 
 log "Verifying idempotent replay"
@@ -342,5 +343,12 @@ request POST /webhooks/blockchain 400 "$TMP_DIR/webhook-stale.json" "$TMP_DIR/we
 
 log "Waiting for worker and outbox completion"
 wait_for_worker_completion "$PAYMENT_INTENT_ID"
+
+log "Reading the confirmed payment intent"
+request GET "/payment-intents/$PAYMENT_INTENT_ID" 200 "$TMP_DIR/payment-read.json" "$TMP_DIR/payment-read.headers" \
+  -H "X-Correlation-ID: ${SMOKE_ID}_read"
+
+assert_json_field "$TMP_DIR/payment-read.json" status CONFIRMED
+assert_json_field "$TMP_DIR/payment-read.json" confirmedTxHash "$WEBHOOK_TX_HASH"
 
 log "Smoke check passed for $SMOKE_ID"

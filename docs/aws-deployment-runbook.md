@@ -179,7 +179,13 @@ aws logs tail "/ecs/$NAME_PREFIX/worker" --since 10m --filter-pattern '?"outbox_
 aws logs tail "/ecs/$NAME_PREFIX/api" --since 10m --filter-pattern "\"$SMOKE_ID\""
 ```
 
-The check passes when the API log shows `webhook_accepted` for `evt_$SMOKE_ID` and the worker log shows `outbox_dispatch_published` followed by `worker_job_processed` with `"status":"PROCESSED"` for the same `webhookEventId`. Worker events carry the internal `webhookEventId`, not the provider `eventId`; on an otherwise idle environment the pair right after the webhook belongs to the smoke request. A `worker_job_failed` event carries the failure reason in `errorCode` instead. Each log line is a Nest console prefix followed by the JSON event, so use quoted text filter patterns like these, not JSON filter patterns.
+The check passes when the API log shows `webhook_accepted` for `evt_$SMOKE_ID`, the worker log shows `outbox_dispatch_published` followed by `worker_job_processed` with `"status":"PROCESSED"` for the same `webhookEventId`, and the payment intent reports the confirmation. Worker events carry the internal `webhookEventId`, not the provider `eventId`; on an otherwise idle environment the pair right after the webhook belongs to the smoke request. A `worker_job_failed` event carries the failure reason in `errorCode` instead. Each log line is a Nest console prefix followed by the JSON event, so use quoted text filter patterns like these, not JSON filter patterns.
+
+```bash
+curl -sS "$BASE_URL/payment-intents/$PAYMENT_INTENT_ID" | jq '{status, confirmedTxHash}'
+```
+
+The payment intent returns `"status": "CONFIRMED"` and `"confirmedTxHash": "0x$SMOKE_ID"`.
 
 Record the commit, image digest, `SMOKE_ID`, HTTP status codes, and the matching event names with their timestamps. Never paste secrets, signatures, or full request or response payloads into shared records.
 

@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
@@ -19,6 +20,7 @@ import {
   PaymentIntentStatus,
 } from '../database/entities';
 import { CreatePaymentIntentDto } from './dto/create-payment-intent.dto';
+import { toCanonicalAmount } from './payment-amount';
 import {
   CreatePaymentIntentResult,
   PaymentIntentResponse,
@@ -132,6 +134,22 @@ export class PaymentIntentsService {
     }
   }
 
+  async getPaymentIntent(id: string): Promise<PaymentIntentResponse> {
+    const paymentIntent = await this.dataSource.manager.findOneBy(
+      PaymentIntentEntity,
+      { id },
+    );
+
+    if (!paymentIntent) {
+      throw new NotFoundException({
+        error: 'NOT_FOUND',
+        message: 'Payment intent not found.',
+      });
+    }
+
+    return this.toResponse(paymentIntent);
+  }
+
   private async tryInsertIdempotencyRecord(
     manager: EntityManager,
     idempotencyKey: string,
@@ -215,18 +233,22 @@ export class PaymentIntentsService {
     };
   }
 
+  // Creation, its idempotent replay and reads return the same representation;
+  // metadata stays internal.
   private toResponse(
     paymentIntent: PaymentIntentEntity,
   ): PaymentIntentResponse {
     return {
       id: paymentIntent.id,
       status: paymentIntent.status,
-      amount: paymentIntent.amount,
+      amount: toCanonicalAmount(paymentIntent.amount),
       asset: paymentIntent.asset,
       destination: paymentIntent.destination,
       reference: paymentIntent.reference,
       clientRequestId: paymentIntent.clientRequestId,
+      confirmedTxHash: paymentIntent.confirmedTxHash,
       createdAt: paymentIntent.createdAt.toISOString(),
+      updatedAt: paymentIntent.updatedAt.toISOString(),
     };
   }
 }

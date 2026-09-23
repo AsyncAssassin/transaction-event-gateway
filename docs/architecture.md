@@ -15,7 +15,7 @@ Related documents: [API](api.md), [database schema](database.md), [domain state 
 
 ```mermaid
 flowchart LR
-    client[Client] -->|POST /payment-intents| api[API process]
+    client[Client] -->|POST and GET /payment-intents| api[API process]
     provider[Webhook provider] -->|POST /webhooks/blockchain| api
     api -->|transactions| pg[(PostgreSQL)]
     api -.->|PING from /health/ready only| redis[(Redis)]
@@ -69,6 +69,8 @@ sequenceDiagram
 ```
 
 A concurrent request with the same key blocks on the insert until the first transaction ends. It then inserts (if the first transaction rolled back) or takes the replay or conflict branch. The request hash covers the canonical JSON of the validated body: keys are sorted recursively and numeric strings are not normalized, so `"125.50"` and `"125.5"` differ. All keys share one scope, `payment-intents:create`.
+
+Clients follow an intent with `GET /payment-intents/{id}`, a single read of the row that returns the same representation as the creation response. A replay returns the stored creation response instead, so it does not show a later confirmation.
 
 ### Accept a webhook
 

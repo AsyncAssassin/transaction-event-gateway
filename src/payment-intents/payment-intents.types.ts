@@ -8,7 +8,9 @@ export type PaymentIntentResponse = {
   destination: string;
   reference: string | null;
   clientRequestId: string | null;
+  confirmedTxHash: string | null;
   createdAt: string;
+  updatedAt: string;
 };
 
 export type CreatePaymentIntentResult = {
