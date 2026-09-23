@@ -8,11 +8,16 @@ import {
   toSafeErrorCode,
 } from '../common/logging/structured-logger';
 import {
+  normalizeCorrelationId,
+  runWithCorrelationId,
+} from '../common/request-context/request-context';
+import {
   OutboxEventEntity,
   OutboxEventStatus,
   WebhookEventEntity,
   WebhookEventStatus,
 } from '../database/entities';
+import { ProcessWebhookEventJobData } from '../processing/queue.constants';
 import { WebhookEventJobPublisher } from '../processing/webhook-event-job-publisher.service';
 import {
   PROCESS_WEBHOOK_OUTBOX_TYPE,
@@ -61,10 +66,10 @@ export class OutboxDispatcherService {
       };
 
       for (const outboxEvent of outboxEvents) {
-        let webhookEventId: string;
+        let jobData: ProcessWebhookEventJobData;
 
         try {
-          webhookEventId = getWebhookEventId(outboxEvent);
+          jobData = toJobData(outboxEvent);
         } catch (error) {
           if (error instanceof NonRetryableOutboxError) {
             await this.markNonRetryableFailure(manager, outboxEvent, error);
@@ -85,34 +90,56 @@ export class OutboxDispatcherService {
           continue;
         }
 
-        try {
-          await this.jobPublisher.publishProcessWebhookEvent(webhookEventId);
-          await this.markWebhookQueued(manager, webhookEventId);
-          await this.markPublished(manager, outboxEvent.id);
-          this.logger.info('outbox_dispatch_published', {
-            webhookEventId,
-            status: OutboxEventStatus.Published,
-          });
+        const published = await runWithCorrelationId(
+          jobData.correlationId,
+          () => this.publishOutboxEvent(manager, outboxEvent, jobData),
+        );
+
+        if (published) {
           result.published += 1;
-        } catch (error) {
-          await this.markTransientFailure(manager, outboxEvent, error);
-          this.logger.warn('outbox_dispatch_failed', {
-            webhookEventId,
-            status: OutboxEventStatus.Failed,
-            errorCode: toSafeErrorCode(error, 'OUTBOX_DISPATCH_FAILED'),
-            ...describeError(error),
-          });
-          result.failed += 1;
-          // A failed publish means Redis is down or not answering, so the
-          // remaining rows would fail the same way, each after a command
-          // timeout, while this transaction keeps them locked. Leave them for
-          // the next run.
-          break;
+          continue;
         }
+
+        result.failed += 1;
+        // A failed publish means Redis is down or not answering, so the
+        // remaining rows would fail the same way, each after a command
+        // timeout, while this transaction keeps them locked. Leave them for
+        // the next run.
+        break;
       }
 
       return result;
     });
+  }
+
+  // Runs under the correlation ID of the webhook request, so these log lines,
+  // and those of the queue holder, carry it.
+  private async publishOutboxEvent(
+    manager: EntityManager,
+    outboxEvent: OutboxEventEntity,
+    jobData: ProcessWebhookEventJobData,
+  ): Promise<boolean> {
+    const { webhookEventId } = jobData;
+
+    try {
+      await this.jobPublisher.publishProcessWebhookEvent(jobData);
+      await this.markWebhookQueued(manager, webhookEventId);
+      await this.markPublished(manager, outboxEvent.id);
+      this.logger.info('outbox_dispatch_published', {
+        webhookEventId,
+        status: OutboxEventStatus.Published,
+      });
+      return true;
+    } catch (error) {
+      await this.markTransientFailure(manager, outboxEvent, error);
+      this.logger.warn('outbox_dispatch_failed', {
+        webhookEventId,
+        status: OutboxEventStatus.Failed,
+        errorCode: toSafeErrorCode(error, 'OUTBOX_DISPATCH_FAILED'),
+        ...describeError(error),
+      });
+      return false;
+    }
   }
 
   // After a successful publish the BullMQ job is the only record of pending
@@ -152,7 +179,9 @@ export class OutboxDispatcherService {
           updated_at = now()
         FROM stale
         WHERE outbox.id = stale.id
-        RETURNING outbox.aggregate_id AS "webhookEventId"
+        RETURNING
+          outbox.aggregate_id AS "webhookEventId",
+          outbox.payload ->> 'correlationId' AS "correlationId"
       `,
       [
         WEBHOOK_OUTBOX_AGGREGATE_TYPE,
@@ -165,11 +194,15 @@ export class OutboxDispatcherService {
         OutboxEventStatus.Failed,
         STALE_PUBLISHED_WEBHOOK_REQUEUED,
       ],
-    )) as [Array<{ webhookEventId: string }>, number];
+    )) as [
+      Array<{ webhookEventId: string; correlationId: string | null }>,
+      number,
+    ];
 
     for (const row of rows) {
       this.logger.warn('outbox_reconcile_requeued', {
         webhookEventId: row.webhookEventId,
+        correlationId: normalizeCorrelationId(row.correlationId ?? undefined),
         status: OutboxEventStatus.Failed,
         errorCode: STALE_PUBLISHED_WEBHOOK_REQUEUED,
       });
@@ -278,14 +311,26 @@ class NonRetryableOutboxError extends Error {
   }
 }
 
-function getWebhookEventId(outboxEvent: OutboxEventEntity): string {
-  const payload = outboxEvent.payload as { webhookEventId?: unknown };
+function toJobData(outboxEvent: OutboxEventEntity): ProcessWebhookEventJobData {
+  const payload = outboxEvent.payload as {
+    webhookEventId?: unknown;
+    correlationId?: unknown;
+  };
 
   if (typeof payload.webhookEventId !== 'string') {
     throw new NonRetryableOutboxError(INVALID_OUTBOX_PAYLOAD);
   }
 
-  return payload.webhookEventId;
+  // A missing or malformed correlation ID only costs log correlation, so the
+  // job is still published, without it.
+  const correlationId =
+    typeof payload.correlationId === 'string'
+      ? normalizeCorrelationId(payload.correlationId)
+      : undefined;
+
+  return correlationId === undefined
+    ? { webhookEventId: payload.webhookEventId }
+    : { webhookEventId: payload.webhookEventId, correlationId };
 }
 
 function calculateOutboxBackoffMs(attempts: number): number {

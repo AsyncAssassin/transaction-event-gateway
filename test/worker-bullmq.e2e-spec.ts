@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -38,115 +39,161 @@ describe('Webhook BullMQ worker (e2e)', () => {
   });
 
   it('consumes a BullMQ process-webhook-event job using durable database state', async () => {
-    const paymentIntentId = randomUUID();
-    const webhookEventId = randomUUID();
-    const txHash = '0xbullmq-worker';
+    const { webhookEventId, txHash } =
+      await insertConfirmableWebhookEvent(dataSource);
 
-    await dataSource.query(
-      `
-        INSERT INTO payment_intents (
-          id,
-          status,
-          amount,
-          asset,
-          destination,
-          reference,
-          metadata
-        )
-        VALUES (
-          $1,
-          'CREATED',
-          '125.50',
-          'USDC',
-          'wallet_test_123',
-          'order-1001',
-          '{}'::jsonb
-        )
-      `,
-      [paymentIntentId],
-    );
-
-    await dataSource.query(
-      `
-        INSERT INTO webhook_events (
-          id,
-          provider,
-          external_event_id,
-          nonce,
-          event_type,
-          payment_intent_id,
-          tx_hash,
-          payload,
-          payload_hash,
-          status,
-          received_at
-        )
-        VALUES (
-          $1,
-          'blockchain',
-          $2,
-          $3,
-          'transaction.confirmed',
-          $4,
-          $5,
-          $6::jsonb,
-          $7,
-          'RECEIVED',
-          now()
-        )
-      `,
-      [
-        webhookEventId,
-        `evt_${webhookEventId}`,
-        `nonce_${webhookEventId}`,
-        paymentIntentId,
-        txHash,
-        JSON.stringify({
-          eventId: `evt_${webhookEventId}`,
-          type: 'transaction.confirmed',
-          paymentIntentId,
-          txHash,
-          amount: '125.50',
-          asset: 'USDC',
-        }),
-        `hash_${webhookEventId}`,
-      ],
-    );
-
+    // A job published before correlation IDs were added carries only the ID.
     await queue.add(
       PROCESS_WEBHOOK_EVENT_JOB_NAME,
       { webhookEventId },
       PROCESS_WEBHOOK_EVENT_JOB_OPTIONS,
     );
 
-    await waitFor(async () => {
-      const rows = (await dataSource.query(
-        `
-          SELECT
-            pi.status AS "paymentStatus",
-            pi.confirmed_tx_hash AS "confirmedTxHash",
-            we.status AS "webhookStatus"
-          FROM payment_intents pi
-          JOIN webhook_events we ON we.payment_intent_id = pi.id
-          WHERE we.id = $1
-        `,
-        [webhookEventId],
-      )) as Array<{
-        paymentStatus: string;
-        confirmedTxHash: string | null;
-        webhookStatus: string;
-      }>;
+    await waitFor(() => expectConfirmed(dataSource, webhookEventId, txHash));
+  });
 
-      expect(rows).toEqual([
-        {
-          paymentStatus: 'CONFIRMED',
-          confirmedTxHash: txHash,
-          webhookStatus: 'PROCESSED',
-        },
-      ]);
-    });
+  it('logs the job under the correlation ID of the webhook request', async () => {
+    const log = jest.spyOn(Logger.prototype, 'log');
+
+    try {
+      const { webhookEventId, txHash } =
+        await insertConfirmableWebhookEvent(dataSource);
+
+      await queue.add(
+        PROCESS_WEBHOOK_EVENT_JOB_NAME,
+        { webhookEventId, correlationId: 'request-worker-1' },
+        PROCESS_WEBHOOK_EVENT_JOB_OPTIONS,
+      );
+
+      await waitFor(async () => {
+        await expectConfirmed(dataSource, webhookEventId, txHash);
+        expect(log).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: 'worker_job_processed',
+            webhookEventId,
+            correlationId: 'request-worker-1',
+            requestId: expect.any(String),
+            status: 'PROCESSED',
+          }),
+        );
+      });
+    } finally {
+      log.mockRestore();
+    }
   });
 });
+
+async function insertConfirmableWebhookEvent(
+  dataSource: DataSource,
+): Promise<{ webhookEventId: string; txHash: string }> {
+  const paymentIntentId = randomUUID();
+  const webhookEventId = randomUUID();
+  const txHash = `0x${webhookEventId.replace(/-/g, '')}`;
+
+  await dataSource.query(
+    `
+      INSERT INTO payment_intents (
+        id,
+        status,
+        amount,
+        asset,
+        destination,
+        reference,
+        metadata
+      )
+      VALUES (
+        $1,
+        'CREATED',
+        '125.50',
+        'USDC',
+        'wallet_test_123',
+        'order-1001',
+        '{}'::jsonb
+      )
+    `,
+    [paymentIntentId],
+  );
+
+  await dataSource.query(
+    `
+      INSERT INTO webhook_events (
+        id,
+        provider,
+        external_event_id,
+        nonce,
+        event_type,
+        payment_intent_id,
+        tx_hash,
+        payload,
+        payload_hash,
+        status,
+        received_at
+      )
+      VALUES (
+        $1,
+        'blockchain',
+        $2,
+        $3,
+        'transaction.confirmed',
+        $4,
+        $5,
+        $6::jsonb,
+        $7,
+        'RECEIVED',
+        now()
+      )
+    `,
+    [
+      webhookEventId,
+      `evt_${webhookEventId}`,
+      `nonce_${webhookEventId}`,
+      paymentIntentId,
+      txHash,
+      JSON.stringify({
+        eventId: `evt_${webhookEventId}`,
+        type: 'transaction.confirmed',
+        paymentIntentId,
+        txHash,
+        amount: '125.50',
+        asset: 'USDC',
+      }),
+      `hash_${webhookEventId}`,
+    ],
+  );
+
+  return { webhookEventId, txHash };
+}
+
+async function expectConfirmed(
+  dataSource: DataSource,
+  webhookEventId: string,
+  txHash: string,
+): Promise<void> {
+  const rows = (await dataSource.query(
+    `
+      SELECT
+        pi.status AS "paymentStatus",
+        pi.confirmed_tx_hash AS "confirmedTxHash",
+        we.status AS "webhookStatus"
+      FROM payment_intents pi
+      JOIN webhook_events we ON we.payment_intent_id = pi.id
+      WHERE we.id = $1
+    `,
+    [webhookEventId],
+  )) as Array<{
+    paymentStatus: string;
+    confirmedTxHash: string | null;
+    webhookStatus: string;
+  }>;
+
+  expect(rows).toEqual([
+    {
+      paymentStatus: 'CONFIRMED',
+      confirmedTxHash: txHash,
+      webhookStatus: 'PROCESSED',
+    },
+  ]);
+}
 
 async function waitFor(assertion: () => Promise<void>): Promise<void> {
   const deadline = Date.now() + 5_000;

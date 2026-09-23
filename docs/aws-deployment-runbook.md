@@ -176,12 +176,12 @@ The first command prints the new payment intent ID (a UUID); the webhook returns
 
 ```bash
 aws logs tail "/ecs/$NAME_PREFIX/worker" --since 10m \
-  --filter-pattern '{ $.event = "outbox_dispatch_published" || $.event = "worker_job_processed" }'
+  --filter-pattern "{ \$.correlationId = \"$SMOKE_ID-webhook\" }"
 aws logs tail "/ecs/$NAME_PREFIX/api" --since 10m \
   --filter-pattern "{ \$.correlationId = \"$SMOKE_ID\" || \$.correlationId = \"$SMOKE_ID-webhook\" }"
 ```
 
-The check passes when the API log shows `webhook_accepted` for `evt_$SMOKE_ID`, the worker log shows `outbox_dispatch_published` followed by `worker_job_processed` with `"status":"PROCESSED"` for the same `webhookEventId`, and the payment intent reports the confirmation. Worker events carry the internal `webhookEventId`, not the provider `eventId`; on an otherwise idle environment the pair right after the webhook belongs to the smoke request. A `worker_job_failed` event carries the failure reason in `errorCode` instead. Each log line is one JSON object, so the filter patterns match its fields.
+The check passes when the API log shows `webhook_accepted` for `evt_$SMOKE_ID`, the worker log shows `outbox_dispatch_published` followed by `worker_job_processed` with `"status":"PROCESSED"` for the same `webhookEventId`, and the payment intent reports the confirmation. The worker lines carry the correlation ID of the webhook request, `$SMOKE_ID-webhook`, so the filter selects this webhook's publication and processing only. A `worker_job_failed` event carries the failure reason in `errorCode` instead. Each log line is one JSON object, so the filter patterns match its fields.
 
 ```bash
 curl -sS "$BASE_URL/payment-intents/$PAYMENT_INTENT_ID" | jq '{status, confirmedTxHash}'

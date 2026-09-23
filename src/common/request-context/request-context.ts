@@ -37,7 +37,24 @@ export function getCorrelationId(): string | undefined {
   return getRequestContext()?.correlationId;
 }
 
-function normalizeCorrelationId(value: string | undefined): string | undefined {
+// Work that a request started later, such as publishing its outbox row or
+// processing its job, runs under the request's correlation ID with a new
+// requestId, so its log lines can be found by that ID. Without a valid ID the
+// work runs without a context.
+export function runWithCorrelationId<T>(
+  correlationId: string | undefined,
+  callback: () => T,
+): T {
+  if (normalizeCorrelationId(correlationId) === undefined) {
+    return callback();
+  }
+
+  return runWithRequestContext(createRequestContext(correlationId), callback);
+}
+
+export function normalizeCorrelationId(
+  value: string | undefined,
+): string | undefined {
   const trimmed = value?.trim();
 
   if (

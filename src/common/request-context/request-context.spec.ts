@@ -1,6 +1,8 @@
 import {
   createRequestContext,
+  getCorrelationId,
   getRequestContext,
+  runWithCorrelationId,
   runWithRequestContext,
 } from './request-context';
 
@@ -32,4 +34,27 @@ describe('request context', () => {
       expect(getRequestContext()).toBe(context);
     });
   });
+
+  it('runs background work under a stored correlation ID with its own request ID', async () => {
+    const outer = createRequestContext('request-789');
+
+    await runWithRequestContext(outer, () =>
+      runWithCorrelationId('request-789', async () => {
+        await Promise.resolve();
+        expect(getCorrelationId()).toBe('request-789');
+        expect(getRequestContext()?.requestId).not.toBe(outer.requestId);
+      }),
+    );
+  });
+
+  it.each([undefined, '', 'bad id with spaces', 'x'.repeat(256)])(
+    'runs background work without a context for the correlation ID %p',
+    (correlationId) => {
+      const result = runWithCorrelationId(correlationId, () =>
+        getRequestContext(),
+      );
+
+      expect(result).toBeUndefined();
+    },
+  );
 });

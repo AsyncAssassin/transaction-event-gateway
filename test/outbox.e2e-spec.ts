@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
@@ -108,6 +109,52 @@ describe('Outbox dispatcher (e2e)', () => {
     });
   });
 
+  it('carries the correlation ID of the webhook request into the job and the dispatch log line', async () => {
+    const log = jest.spyOn(Logger.prototype, 'log');
+    const webhookEventId = await insertWebhookEvent(dataSource);
+    await insertOutboxEvent(dataSource, webhookEventId, {
+      webhookEventId,
+      correlationId: 'request-outbox-1',
+    });
+
+    try {
+      await expect(dispatcher.dispatchBatch()).resolves.toMatchObject({
+        published: 1,
+      });
+
+      const jobs = await queue.getJobs(['waiting', 'delayed', 'completed']);
+      expect(jobs.map((job) => job.data)).toEqual([
+        { webhookEventId, correlationId: 'request-outbox-1' },
+      ]);
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'outbox_dispatch_published',
+          webhookEventId,
+          correlationId: 'request-outbox-1',
+          requestId: expect.any(String),
+        }),
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('publishes the job without a correlation ID that is not a safe header value', async () => {
+    const webhookEventId = await insertWebhookEvent(dataSource);
+    await insertOutboxEvent(dataSource, webhookEventId, {
+      webhookEventId,
+      correlationId: 'not a header value',
+    });
+
+    await expect(dispatcher.dispatchBatch()).resolves.toMatchObject({
+      published: 1,
+      failed: 0,
+    });
+
+    const jobs = await queue.getJobs(['waiting', 'delayed', 'completed']);
+    expect(jobs.map((job) => job.data)).toEqual([{ webhookEventId }]);
+  });
+
   it('records retry metadata when publishing fails', async () => {
     const webhookEventId = await insertWebhookEvent(dataSource);
     const outboxEventId = await insertOutboxEvent(dataSource, webhookEventId);
@@ -127,9 +174,9 @@ describe('Outbox dispatcher (e2e)', () => {
       published: 0,
       failed: 1,
     });
-    expect(failingPublisher.publishProcessWebhookEvent).toHaveBeenCalledWith(
+    expect(failingPublisher.publishProcessWebhookEvent).toHaveBeenCalledWith({
       webhookEventId,
-    );
+    });
 
     const rows = (await dataSource.query(
       `
@@ -373,10 +420,9 @@ describe('Outbox dispatcher (e2e)', () => {
       failed: 0,
     });
     expect(publisher.publishProcessWebhookEvent).toHaveBeenCalledTimes(2);
-    expect(publisher.publishProcessWebhookEvent).toHaveBeenNthCalledWith(
-      2,
+    expect(publisher.publishProcessWebhookEvent).toHaveBeenNthCalledWith(2, {
       webhookEventId,
-    );
+    });
 
     const rows = (await dataSource.query(
       `
@@ -411,6 +457,30 @@ describe('Outbox dispatcher (e2e)', () => {
     ]);
     expect(rows[0]?.publishedAt).toBeInstanceOf(Date);
     await expectWebhookStatus(dataSource, webhookEventId, 'QUEUED');
+  });
+
+  it('logs the correlation ID of a stale row it hands back', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn');
+    const webhookEventId = await insertWebhookEvent(dataSource, 'QUEUED');
+    await insertPublishedOutboxEvent(dataSource, webhookEventId, '11 minutes', {
+      webhookEventId,
+      correlationId: 'request-reconcile-1',
+    });
+
+    try {
+      await expect(dispatcher.reconcileStalePublishedEvents()).resolves.toEqual(
+        { requeued: 1 },
+      );
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'outbox_reconcile_requeued',
+          webhookEventId,
+          correlationId: 'request-reconcile-1',
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('hands stale PUBLISHED rows of unfinished webhook events back to the dispatcher', async () => {
@@ -722,6 +792,7 @@ async function insertPublishedOutboxEvent(
   dataSource: DataSource,
   webhookEventId: string,
   publishedAgo: string,
+  payload: Record<string, unknown> = { webhookEventId },
 ): Promise<string> {
   const outboxEventId = randomUUID();
 
@@ -746,12 +817,7 @@ async function insertPublishedOutboxEvent(
         now() - $4::interval
       )
     `,
-    [
-      outboxEventId,
-      webhookEventId,
-      JSON.stringify({ webhookEventId }),
-      publishedAgo,
-    ],
+    [outboxEventId, webhookEventId, JSON.stringify(payload), publishedAgo],
   );
 
   return outboxEventId;
