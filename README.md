@@ -432,6 +432,7 @@ Terraform defines the infrastructure but no deployment pipeline: images, secret 
 ```text
 .
   README.md
+  LICENSE
   Dockerfile
   docker-compose.yml
   package.json
@@ -463,3 +464,7 @@ Terraform defines the infrastructure but no deployment pipeline: images, secret 
   test/
   .github/workflows/
 ```
+
+## License
+
+[MIT](LICENSE)

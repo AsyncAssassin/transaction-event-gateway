@@ -1,9 +1,9 @@
 {
   "name": "transaction-event-gateway",
   "version": "0.1.0",
-  "description": "Backend service scaffold for transaction event processing.",
+  "description": "NestJS service for idempotent payment intents and HMAC-signed blockchain webhooks, with a PostgreSQL transactional outbox and a BullMQ worker.",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "engines": {
     "node": "22.x"
   },
