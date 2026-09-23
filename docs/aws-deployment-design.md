@@ -77,6 +77,7 @@ The commands are in [Build and push the image](aws-deployment-runbook.md#build-a
 - ECS service and task definition family `<project_name>-<environment>-api`, container `api`, command `node dist/main.js`, port `app_port` (default `3000`).
 - `api_desired_count` defaults to `1`. Production-like availability needs at least two tasks in different Availability Zones.
 - Inbound traffic comes only from the ALB security group.
+- The API keeps idle HTTP connections open for 65 seconds, longer than the ALB idle timeout of 60 seconds that `alb.tf` leaves at its default, so the ALB does not reuse a connection that the task is closing, which would end in a 502 (`src/common/bootstrap.ts`).
 - The ALB target group checks `GET /health/serving` (configuration and PostgreSQL), so a Redis incident does not drain API tasks that can still create payment intents and accept webhooks. `GET /health/ready` (configuration, PostgreSQL, and Redis) is the check for operators and deployments.
 - Rate limiting is process-local, in memory, and keyed by the request source that Nest/Express observes. Behind the ALB that source is not the end client, and limiter state is not shared between tasks. Real multi-client traffic needs proxy-aware forwarded-IP handling and a shared limiter, or an explicit decision to accept this limitation.
 
@@ -174,7 +175,6 @@ Not provided: CloudWatch alarms, dashboards, Container Insights, ALB access logs
 - The ALB listener is plain HTTP and `allowed_http_cidrs` defaults to `0.0.0.0/0`, so request bodies cross the internet unencrypted until an HTTPS listener exists.
 - Health endpoints are public and exempt from rate limiting, and the PostgreSQL health check uses a one-connection pool with a one-second connection timeout. A burst of requests to `/health/serving` can fail the ALB health checks and drain the API tasks.
 - The worker task has no container health check, so ECS keeps a hung worker running.
-- Node's default HTTP keep-alive timeout (5 seconds) is shorter than the ALB idle timeout (60 seconds; `alb.tf` does not change it), which can cause occasional ALB 502 responses.
 - RDS is single-AZ and Redis is one node without failover by default; Redis transit encryption is off by default.
 - Rotating `WEBHOOK_SECRET` needs application support for overlapping old and new secrets, which does not exist.
 - There is no manual retry API or admin tooling; recovery beyond the automatic outbox retries and reconciliation means inspecting PostgreSQL directly.

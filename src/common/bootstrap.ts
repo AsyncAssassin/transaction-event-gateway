@@ -1,4 +1,6 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { Express } from 'express';
+import { Server } from 'node:http';
 
 import { httpRequestLoggingMiddleware } from './logging/http-request-logging.middleware';
 import { CorrelationIdExceptionFilter } from './request-context/correlation-id-exception.filter';
@@ -7,6 +9,14 @@ import { requestBodyGuardMiddleware } from './validation/request-body-guard.midd
 import { createValidationException } from './validation/validation-error-response';
 
 const MAX_REQUEST_BODY_SIZE = '256kb';
+
+// The AWS load balancer keeps idle connections to a target open for 60 s and
+// reuses them, while Node closes an idle keep-alive connection after 5 s. A
+// request sent on a connection that Node is closing fails with a 502, so idle
+// connections stay open longer than the load balancer keeps them, and the
+// header timeout stays above the keep-alive timeout.
+export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
+export const HEADERS_TIMEOUT_MS = 66_000;
 
 type BodyParserApplication = INestApplication & {
   useBodyParser(
@@ -17,6 +27,7 @@ type BodyParserApplication = INestApplication & {
 
 export function configureHttpApp(app: INestApplication): void {
   app.enableShutdownHooks();
+  configureHttpServer(app);
   app.use(correlationIdMiddleware);
   app.use(httpRequestLoggingMiddleware);
   configureBodyParsers(app);
@@ -30,6 +41,15 @@ export function configureHttpApp(app: INestApplication): void {
       whitelist: true,
     }),
   );
+}
+
+function configureHttpServer(app: INestApplication): void {
+  const expressApp = app.getHttpAdapter().getInstance() as Express;
+  expressApp.disable('x-powered-by');
+
+  const server = app.getHttpServer() as Server;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
 }
 
 // Nest registers any parser that is still missing during init(), after every
