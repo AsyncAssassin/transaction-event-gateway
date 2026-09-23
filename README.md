@@ -54,7 +54,7 @@ Main reliability boundaries:
 - Idempotency records protect `POST /payment-intents` with `(scope, idempotency_key)`, request hashes, and stored response snapshots.
 - The webhook inbox stores signed provider events before asynchronous work starts.
 - The transactional outbox stores durable work in the same transaction as webhook acceptance.
-- BullMQ jobs contain only the durable `webhookEventId`.
+- BullMQ jobs contain only the durable `webhookEventId` and the correlation ID of the accepting request.
 - Worker processing reloads state from PostgreSQL, uses row locks, and is safe under duplicate jobs.
 - Correlation IDs and structured logging are enabled for HTTP requests and error responses.
 - `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis; `/health/serving` checks configuration and PostgreSQL for load balancer routing.
@@ -324,7 +324,7 @@ Transient Redis, BullMQ, or publisher failures leave the accepted webhook durabl
 
 A published job can still be lost, for example with Redis data or after all five BullMQ attempts fail during a PostgreSQL outage. Every 60 seconds the worker hands outbox rows that were published more than 10 minutes ago, and whose webhook event has not finished, back to the dispatcher, which publishes them again; see [failure modes](docs/failure-modes.md#webhook-job-lost-or-retries-exhausted).
 
-Dispatcher behavior is controlled by `OUTBOX_DISPATCH_ENABLED` and `OUTBOX_DISPATCH_INTERVAL_MS`. Jobs contain only `webhookEventId`, so duplicate publication or duplicate delivery is safe: the worker reloads the durable webhook event, locks rows in PostgreSQL, checks current status, and records processing attempts.
+Dispatcher behavior is controlled by `OUTBOX_DISPATCH_ENABLED` and `OUTBOX_DISPATCH_INTERVAL_MS`. Jobs contain only `webhookEventId` and a correlation ID for logging, so duplicate publication or duplicate delivery is safe: the worker reloads the durable webhook event, locks rows in PostgreSQL, checks current status, and records processing attempts.
 
 Operational troubleshooting notes are in `docs/runbook.md`.
 
@@ -342,7 +342,7 @@ Operational troubleshooting notes are in `docs/runbook.md`.
 ## Observability
 
 - Logs are one JSON object per line in production and Docker Compose (`LOG_FORMAT=json`), with a timestamp, level, context, event name, correlation IDs, safe entity identifiers, statuses, and error codes; local development keeps Nest's text format. 5xx responses and worker failures also log the error name, a safe cause code such as a SQLSTATE or errno, and the top stack frames, never the raw error message.
-- `X-Correlation-ID` is accepted on inbound requests; missing values are generated and returned in responses.
+- `X-Correlation-ID` is accepted on inbound requests; missing values are generated and returned in responses. For a webhook, the ID travels with the outbox row and the BullMQ job, so the API and worker log lines of one webhook share it.
 - `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis. `/health/serving` excludes Redis for load balancer serving readiness.
 - Swagger UI and OpenAPI JSON are exposed at `/docs` and `/docs/openapi.json` for the implemented API surface.
 - The smoke script exercises the full local path from health and OpenAPI through idempotency, signed webhook acceptance, outbox publication, worker processing, and final database state.

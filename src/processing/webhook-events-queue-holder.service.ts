@@ -58,11 +58,13 @@ export class WebhookEventsQueueHolder implements OnModuleDestroy {
     return this.replaceQueue(this.currentQueue);
   }
 
-  async addProcessWebhookEvent(webhookEventId: string): Promise<void> {
+  async addProcessWebhookEvent(
+    data: ProcessWebhookEventJobData,
+  ): Promise<void> {
     const firstQueue = await this.getHealthyQueueForPublish();
 
     try {
-      await addProcessWebhookEvent(firstQueue, webhookEventId);
+      await addProcessWebhookEvent(firstQueue, data);
       this.markPublishSucceeded();
       return;
     } catch (error) {
@@ -73,7 +75,7 @@ export class WebhookEventsQueueHolder implements OnModuleDestroy {
     const retryQueue = await this.getHealthyQueueForPublish();
 
     try {
-      await addProcessWebhookEvent(retryQueue, webhookEventId);
+      await addProcessWebhookEvent(retryQueue, data);
       this.markPublishSucceeded();
     } catch (error) {
       this.markPoisoned(retryQueue, error);
@@ -236,11 +238,11 @@ export class WebhookEventsQueueHolder implements OnModuleDestroy {
 
 function addProcessWebhookEvent(
   queue: Queue<ProcessWebhookEventJobData>,
-  webhookEventId: string,
+  data: ProcessWebhookEventJobData,
 ): Promise<unknown> {
   return queue.add(
     PROCESS_WEBHOOK_EVENT_JOB_NAME,
-    { webhookEventId },
+    data,
     PROCESS_WEBHOOK_EVENT_JOB_OPTIONS,
   );
 }

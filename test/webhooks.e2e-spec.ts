@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
@@ -114,9 +114,61 @@ describe('Blockchain webhooks (e2e)', () => {
       outboxStatus: 'PENDING',
     });
     expect(rows[0]?.payloadHash).toMatch(/^[a-f0-9]{64}$/);
+    // Without an X-Correlation-ID header the generated one is stored.
     expect(rows[0]?.outboxPayload).toEqual({
       webhookEventId: rows[0]?.aggregateId,
+      correlationId: response.headers['x-correlation-id'],
     });
+  });
+
+  it('stores the request correlation ID in the outbox payload and logs the webhook event ID', async () => {
+    const log = jest.spyOn(Logger.prototype, 'log');
+
+    try {
+      await sendSignedWebhook({
+        app,
+        payload: basePayload,
+        nonce: 'nonce_correlated',
+        correlationId: 'request-webhook-1',
+      }).expect(202);
+      await sendSignedWebhook({
+        app,
+        payload: basePayload,
+        nonce: 'nonce_correlated',
+        correlationId: 'request-webhook-2',
+      }).expect(202);
+
+      const rows = (await dataSource.query(
+        'SELECT aggregate_id AS "webhookEventId", payload FROM outbox_events',
+      )) as Array<{ webhookEventId: string; payload: unknown }>;
+      const webhookEventId = rows[0]?.webhookEventId;
+
+      expect(rows).toEqual([
+        {
+          webhookEventId,
+          payload: { webhookEventId, correlationId: 'request-webhook-1' },
+        },
+      ]);
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'webhook_accepted',
+          correlationId: 'request-webhook-1',
+          externalEventId: 'evt_123',
+          webhookEventId,
+          status: 'ACCEPTED',
+        }),
+      );
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'webhook_replayed',
+          correlationId: 'request-webhook-2',
+          webhookEventId,
+          status: 'ALREADY_ACCEPTED',
+        }),
+      );
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('rejects an invalid signature without persisting inbox or outbox rows', async () => {
@@ -314,11 +366,13 @@ function sendSignedWebhook({
   payload,
   nonce,
   timestamp = currentTimestamp(),
+  correlationId,
 }: {
   app: INestApplication;
   payload: Record<string, unknown>;
   nonce: string;
   timestamp?: string;
+  correlationId?: string;
 }): request.Test {
   const body = JSON.stringify(payload);
   const signature = createWebhookSignature({
@@ -328,13 +382,18 @@ function sendSignedWebhook({
     rawBody: body,
   });
 
-  return request(app.getHttpServer())
+  const pending = request(app.getHttpServer())
     .post('/webhooks/blockchain')
     .set('Content-Type', 'application/json')
     .set('X-Webhook-Timestamp', timestamp)
     .set('X-Webhook-Nonce', nonce)
-    .set('X-Webhook-Signature', signature)
-    .send(body);
+    .set('X-Webhook-Signature', signature);
+
+  if (correlationId) {
+    pending.set('X-Correlation-ID', correlationId);
+  }
+
+  return pending.send(body);
 }
 
 function currentTimestamp(): string {

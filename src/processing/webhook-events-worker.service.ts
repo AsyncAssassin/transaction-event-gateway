@@ -13,6 +13,10 @@ import {
   toSafeErrorCode,
 } from '../common/logging/structured-logger';
 import {
+  normalizeCorrelationId,
+  runWithCorrelationId,
+} from '../common/request-context/request-context';
+import {
   ProcessWebhookEventJobData,
   PROCESS_WEBHOOK_EVENT_JOB_NAME,
   WEBHOOK_EVENTS_QUEUE_NAME,
@@ -63,13 +67,17 @@ export class WebhookEventsWorkerService
       },
     );
 
+    // BullMQ emits 'failed' outside the job's correlation context, so these
+    // lines take the correlation ID from the job data.
     this.worker.on('failed', (job, error) => {
       const errorCode = toSafeErrorCode(error, 'WORKER_JOB_FAILED');
       const diagnostics = describeError(error);
+      const correlationId = normalizeCorrelationId(job?.data.correlationId);
 
       this.logger.warn('worker_job_failed', {
         jobId: normalizeJobId(job?.id),
         webhookEventId: job?.data.webhookEventId,
+        correlationId,
         status: 'FAILED',
         errorCode,
         ...diagnostics,
@@ -81,6 +89,7 @@ export class WebhookEventsWorkerService
         this.logger.warn('worker_job_exhausted', {
           jobId: normalizeJobId(job.id),
           webhookEventId: job.data.webhookEventId,
+          correlationId,
           status: 'FAILED',
           errorCode,
           ...diagnostics,
@@ -95,7 +104,17 @@ export class WebhookEventsWorkerService
     await this.worker?.close();
   }
 
-  private async process(job: Job<ProcessWebhookEventJobData>): Promise<void> {
+  // Runs under the correlation ID of the webhook request, so every log line of
+  // the job carries it.
+  private process(job: Job<ProcessWebhookEventJobData>): Promise<void> {
+    return runWithCorrelationId(job.data.correlationId, () =>
+      this.processJob(job),
+    );
+  }
+
+  private async processJob(
+    job: Job<ProcessWebhookEventJobData>,
+  ): Promise<void> {
     if (job.name !== PROCESS_WEBHOOK_EVENT_JOB_NAME) {
       throw new Error('UNSUPPORTED_JOB_TYPE');
     }

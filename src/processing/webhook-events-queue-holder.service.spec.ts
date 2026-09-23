@@ -50,11 +50,14 @@ describe('WebhookEventsQueueHolder', () => {
       queue as unknown as Queue<ProcessWebhookEventJobData>,
     );
 
-    await holder.addProcessWebhookEvent('webhook-event-1');
+    await holder.addProcessWebhookEvent({
+      webhookEventId: 'webhook-event-1',
+      correlationId: 'request-123',
+    });
 
     expect(queue.add).toHaveBeenCalledWith(
       PROCESS_WEBHOOK_EVENT_JOB_NAME,
-      { webhookEventId: 'webhook-event-1' },
+      { webhookEventId: 'webhook-event-1', correlationId: 'request-123' },
       PROCESS_WEBHOOK_EVENT_JOB_OPTIONS,
     );
   });
@@ -65,7 +68,7 @@ describe('WebhookEventsQueueHolder', () => {
       queue as unknown as Queue<ProcessWebhookEventJobData>,
     );
 
-    await holder.addProcessWebhookEvent('webhook-event-1');
+    await holder.addProcessWebhookEvent({ webhookEventId: 'webhook-event-1' });
 
     expect(queueFactory).toHaveBeenCalledWith(
       WEBHOOK_EVENTS_QUEUE_NAME,
@@ -96,7 +99,7 @@ describe('WebhookEventsQueueHolder', () => {
       );
 
     await expect(
-      holder.addProcessWebhookEvent('webhook-event-1'),
+      holder.addProcessWebhookEvent({ webhookEventId: 'webhook-event-1' }),
     ).resolves.toBeUndefined();
 
     expect(firstQueue.add).toHaveBeenCalledTimes(1);
@@ -124,7 +127,7 @@ describe('WebhookEventsQueueHolder', () => {
       );
 
     await expect(
-      holder.addProcessWebhookEvent('webhook-event-1'),
+      holder.addProcessWebhookEvent({ webhookEventId: 'webhook-event-1' }),
     ).rejects.toThrow('redis still down');
 
     expect(firstQueue.close).toHaveBeenCalledTimes(1);
@@ -144,7 +147,7 @@ describe('WebhookEventsQueueHolder', () => {
 
     holder.getQueue();
     firstQueue.emitError(new Error('init rejected'));
-    await holder.addProcessWebhookEvent('webhook-event-1');
+    await holder.addProcessWebhookEvent({ webhookEventId: 'webhook-event-1' });
 
     expect(firstQueue.close).toHaveBeenCalledTimes(1);
     expect(firstQueue.add).not.toHaveBeenCalled();
@@ -182,7 +185,9 @@ describe('WebhookEventsQueueHolder', () => {
         suppressedCount: 0,
       });
 
-      await holder.addProcessWebhookEvent('webhook-event-1');
+      await holder.addProcessWebhookEvent({
+        webhookEventId: 'webhook-event-1',
+      });
 
       expect(secondQueue.add).toHaveBeenCalledTimes(1);
       expect(info).toHaveBeenCalledWith('webhook_events_queue_recovered', {

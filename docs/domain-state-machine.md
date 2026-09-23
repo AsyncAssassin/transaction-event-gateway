@@ -2,7 +2,7 @@
 
 This document lists the statuses of the durable records, who writes each status and when. The statuses are PostgreSQL enum types (`payment_intent_status`, `webhook_event_status`, `outbox_event_status`); the processing attempt status is a `varchar` with a check constraint. Columns and constraints are described in [database.md](database.md), and the flows that drive the transitions in [architecture.md](architecture.md).
 
-Every transition is written in a PostgreSQL transaction. BullMQ jobs carry only a `webhookEventId`; no status lives in Redis.
+Every transition is written in a PostgreSQL transaction. BullMQ jobs carry only a `webhookEventId` and a correlation ID for logging; no status lives in Redis.
 
 ## Payment intent
 
@@ -81,7 +81,7 @@ A domain failure is a durable result, so BullMQ does not retry it.
 
 ## Outbox event
 
-Outbox rows exist only for webhook processing: `type = process-webhook-event`, `aggregate_type = webhook_event`, `aggregate_id` is the webhook event ID, and `payload` is `{ webhookEventId }`.
+Outbox rows exist only for webhook processing: `type = process-webhook-event`, `aggregate_type = webhook_event`, `aggregate_id` is the webhook event ID, and `payload` is `{ webhookEventId, correlationId }`, where `correlationId` is the correlation ID of the request that accepted the webhook; rows written before it was added have only `webhookEventId`.
 
 | Status | `dead_at` | Meaning |
 | --- | --- | --- |
@@ -114,7 +114,7 @@ A row is due for dispatch when `dead_at` is null and it is `PENDING`, or `FAILED
 | `PUBLISHED` to `FAILED` | Reconciler, every 60 s: published more than 10 minutes ago and the webhook is still `RECEIVED` or `QUEUED` | `next_attempt_at = now()`; `last_error = STALE_PUBLISHED_WEBHOOK_REQUEUED`; `attempts` unchanged; `dead_at` stays null |
 
 - Transient failures are retried indefinitely, with delays of 5, 10, 20, 40, 80 and 160 s and then 5 minutes. `attempts` only counts failed publishes.
-- A dead row is not retried until an operator repairs its payload and clears `dead_at`.
+- A dead row is not retried until an operator repairs its payload and clears `dead_at`. A missing or malformed `correlationId` never makes a row dead; the job is published without it.
 - The reconciler handles at most 100 rows per run. Its details, including why a job can be lost after `PUBLISHED`, are in [architecture.md](architecture.md#reconcile-stale-published-events).
 - Publishing and committing are not atomic, so one outbox row can produce more than one job. The worker rules above make duplicates harmless.
 

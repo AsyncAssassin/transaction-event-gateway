@@ -10,10 +10,14 @@ describe('WebhookEventJobPublisher', () => {
       queueHolder as unknown as WebhookEventsQueueHolder,
     );
 
-    await publisher.publishProcessWebhookEvent('webhook-event-1');
+    await publisher.publishProcessWebhookEvent({
+      webhookEventId: 'webhook-event-1',
+      correlationId: 'request-123',
+    });
 
-    expect(queueHolder.addProcessWebhookEvent).toHaveBeenCalledWith(
-      'webhook-event-1',
-    );
+    expect(queueHolder.addProcessWebhookEvent).toHaveBeenCalledWith({
+      webhookEventId: 'webhook-event-1',
+      correlationId: 'request-123',
+    });
   });
 });

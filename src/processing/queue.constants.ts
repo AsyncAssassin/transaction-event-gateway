@@ -3,8 +3,11 @@ import { JobsOptions } from 'bullmq';
 export const WEBHOOK_EVENTS_QUEUE_NAME = 'webhook-events';
 export const PROCESS_WEBHOOK_EVENT_JOB_NAME = 'process-webhook-event';
 
+// correlationId comes from the outbox payload; jobs published before it was
+// added carry only webhookEventId.
 export type ProcessWebhookEventJobData = {
   webhookEventId: string;
+  correlationId?: string;
 };
 
 export const WEBHOOK_EVENTS_QUEUE = Symbol('WEBHOOK_EVENTS_QUEUE');

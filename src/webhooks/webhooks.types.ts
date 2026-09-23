@@ -4,6 +4,13 @@ export const BLOCKCHAIN_WEBHOOK_PROVIDER = 'blockchain';
 export const PROCESS_WEBHOOK_OUTBOX_TYPE = 'process-webhook-event';
 export const WEBHOOK_OUTBOX_AGGREGATE_TYPE = 'webhook_event';
 
+// correlationId is the X-Correlation-ID of the request that accepted the
+// webhook. Rows written before it was added have only webhookEventId.
+export type ProcessWebhookOutboxPayload = {
+  webhookEventId: string;
+  correlationId?: string;
+};
+
 export type BlockchainWebhookPayload = {
   eventId: string;
   type: string;

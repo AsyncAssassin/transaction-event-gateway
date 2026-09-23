@@ -20,7 +20,7 @@ Recommended for all requests:
 X-Correlation-ID: request-123
 ```
 
-The service accepts an inbound `X-Correlation-ID` of up to 255 visible ASCII characters (no spaces) and generates a UUID when the header is missing or invalid. Every response, including errors, returns the effective value in `X-Correlation-ID`; error bodies also carry it as `correlationId`.
+The service accepts an inbound `X-Correlation-ID` of up to 255 visible ASCII characters (no spaces) and generates a UUID when the header is missing or invalid. Every response, including errors, returns the effective value in `X-Correlation-ID`; error bodies also carry it as `correlationId`. For an accepted webhook, the ID is stored with the event and appears in the worker's log lines for it.
 
 ## Error Response Shape
 

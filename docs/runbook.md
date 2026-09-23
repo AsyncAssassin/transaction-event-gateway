@@ -137,7 +137,7 @@ The worker must run separately from the API:
 DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway REDIS_URL=redis://localhost:6379 WEBHOOK_SECRET=local-development-placeholder-secret npm run start:worker
 ```
 
-Worker jobs contain only `webhookEventId`, so the worker reloads durable state from PostgreSQL. Duplicate jobs should be safe because processing locks the webhook row and exits successfully if the event is already `PROCESSED`.
+Worker jobs contain only `webhookEventId` and a correlation ID for logging, so the worker reloads durable state from PostgreSQL. Duplicate jobs should be safe because processing locks the webhook row and exits successfully if the event is already `PROCESSED`.
 
 ### Webhook event stays `QUEUED`
 
@@ -231,7 +231,7 @@ If local Redis queue state is suspected, prefer restarting the local Redis conta
 - `http_request_failed` (5xx responses) and the worker and dispatcher failure events (`worker_job_failed`, `worker_job_exhausted`, `outbox_dispatch_failed`, `outbox_dispatch_runner_failed`, `outbox_reconcile_failed`) add `errorName`, `causeCode` (an error code, SQLSTATE, or errno such as `ECONNREFUSED` or `22021`), and `stackTop` (the first three stack frames). The error message itself is never logged, because PostgreSQL messages can contain submitted values.
 - `http_request_data_exception` (warn) means PostgreSQL rejected a submitted value that request validation let through; the request got `400`, and `causeCode` holds the SQLSTATE.
 - Webhook secrets, signatures, raw request bodies, and payload fields are never logged.
-- The correlation ID covers one HTTP request: `http_request_completed`, `http_request_failed`, and the payment intent and webhook events logged while serving it. It is not carried into the outbox or BullMQ jobs; dispatcher and worker events carry `webhookEventId` and `jobId` instead. To connect them to a webhook request, look up the `webhook_events` row by `external_event_id` (the `externalEventId` in `webhook_accepted`).
+- The correlation ID covers the HTTP request (`http_request_completed`, `http_request_failed`, and the payment intent and webhook events logged while serving it) and, for a webhook, the work that follows: the outbox payload and the BullMQ job carry it, and `outbox_dispatch_published`, `worker_job_processed`, `worker_job_failed`, `worker_job_exhausted`, and `outbox_reconcile_requeued` log it next to `webhookEventId`. `webhook_accepted` logs the `webhookEventId` too. To follow one webhook locally: `docker compose logs --no-log-prefix api worker | jq -c 'select(.correlationId == "<id>")'`.
 
 ## Operational Gaps
 

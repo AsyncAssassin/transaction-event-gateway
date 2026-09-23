@@ -19,6 +19,7 @@ import {
   StructuredLogger,
   toSafeErrorCode,
 } from '../common/logging/structured-logger';
+import { getCorrelationId } from '../common/request-context/request-context';
 import { createValidationException } from '../common/validation/validation-error-response';
 import {
   OutboxEventEntity,
@@ -38,6 +39,7 @@ import {
   BlockchainWebhookJsonPayload,
   BlockchainWebhookPayload,
   PROCESS_WEBHOOK_OUTBOX_TYPE,
+  ProcessWebhookOutboxPayload,
   WebhookAcceptanceResponse,
   WebhookRequestHeaders,
   WEBHOOK_OUTBOX_AGGREGATE_TYPE,
@@ -47,6 +49,10 @@ type ValidatedWebhookHeaders = {
   timestamp: string;
   nonce: string;
   signature: string;
+};
+
+type WebhookAcceptance = WebhookAcceptanceResponse & {
+  webhookEventId: string;
 };
 
 @Injectable()
@@ -72,43 +78,47 @@ export class WebhookEventsService {
       const payload = this.toPayload(dto);
       const payloadHash = hashCanonicalJson(payload as JsonValue);
 
-      const response = await this.dataSource.transaction(async (manager) => {
-        const webhookEventId = await this.tryInsertWebhookEvent(
-          manager,
-          headers.nonce,
-          payload,
-          payloadHash,
-        );
-
-        if (webhookEventId === null) {
-          return this.replayOrRejectConflict(
+      const acceptance = await this.dataSource.transaction(
+        async (manager): Promise<WebhookAcceptance> => {
+          const webhookEventId = await this.tryInsertWebhookEvent(
             manager,
             headers.nonce,
-            payload.eventId,
+            payload,
             payloadHash,
           );
-        }
 
-        await this.insertOutboxEvent(manager, webhookEventId);
+          if (webhookEventId === null) {
+            return this.replayOrRejectConflict(
+              manager,
+              headers.nonce,
+              payload.eventId,
+              payloadHash,
+            );
+          }
 
-        return {
-          eventId: payload.eventId,
-          status: 'ACCEPTED' as const,
-        };
-      });
+          await this.insertOutboxEvent(manager, webhookEventId);
+
+          return {
+            eventId: payload.eventId,
+            status: 'ACCEPTED',
+            webhookEventId,
+          };
+        },
+      );
 
       this.logger.info(
-        response.status === 'ACCEPTED'
+        acceptance.status === 'ACCEPTED'
           ? 'webhook_accepted'
           : 'webhook_replayed',
         {
           provider: BLOCKCHAIN_WEBHOOK_PROVIDER,
-          externalEventId: response.eventId,
-          status: response.status,
+          externalEventId: acceptance.eventId,
+          webhookEventId: acceptance.webhookEventId,
+          status: acceptance.status,
         },
       );
 
-      return response;
+      return { eventId: acceptance.eventId, status: acceptance.status };
     } catch (error) {
       this.logger.warn('webhook_rejected', {
         provider: BLOCKCHAIN_WEBHOOK_PROVIDER,
@@ -294,7 +304,7 @@ export class WebhookEventsService {
     nonce: string,
     eventId: string,
     payloadHash: string,
-  ): Promise<WebhookAcceptanceResponse> {
+  ): Promise<WebhookAcceptance> {
     const existingEvent = await manager.findOne(WebhookEventEntity, {
       where: {
         provider: BLOCKCHAIN_WEBHOOK_PROVIDER,
@@ -307,6 +317,7 @@ export class WebhookEventsService {
         return {
           eventId,
           status: 'ALREADY_ACCEPTED',
+          webhookEventId: existingEvent.id,
         };
       }
 
@@ -341,13 +352,16 @@ export class WebhookEventsService {
     manager: EntityManager,
     webhookEventId: string,
   ): Promise<void> {
+    const payload: ProcessWebhookOutboxPayload = {
+      webhookEventId,
+      correlationId: getCorrelationId(),
+    };
+
     await manager.insert(OutboxEventEntity, {
       type: PROCESS_WEBHOOK_OUTBOX_TYPE,
       aggregateType: WEBHOOK_OUTBOX_AGGREGATE_TYPE,
       aggregateId: webhookEventId,
-      payload: {
-        webhookEventId,
-      },
+      payload,
       status: OutboxEventStatus.Pending,
       attempts: 0,
       nextAttemptAt: null,

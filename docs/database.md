@@ -182,6 +182,7 @@ Correctness rationale:
 - Outbox records prevent accepted webhook events from being lost when Redis publication fails.
 - Pending status index keeps dispatcher polling efficient.
 - Aggregate index links each outbox event to the durable webhook event.
+- `payload` is `{ webhookEventId, correlationId }` for webhook processing; `correlationId` only labels log lines and may be missing in older rows.
 - Attempt metadata supports retry with capped backoff and sanitized error reporting. Transient Redis, BullMQ, or publisher failures remain retryable indefinitely with `dead_at` unset. Deterministic poison outbox payloads, such as a missing or non-string `webhookEventId`, are non-retryable and set `dead_at`; the partial `dead_at` index keeps those rows out of dispatcher polling and cheap to inspect.
 - Duplicate publication is acceptable because worker processing is idempotent.
 
