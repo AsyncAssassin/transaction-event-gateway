@@ -65,7 +65,7 @@ npm run test:e2e
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on pull requests and on pushes to `main`. A single job starts PostgreSQL 16 and Redis 7 as service containers and sets the same values that `test/test-env.ts` uses as defaults, including `WEBHOOK_SECRET=test-webhook-secret-value`. Its steps, in order:
+`.github/workflows/ci.yml` runs on pull requests and on pushes to `main`, with a read-only `GITHUB_TOKEN` (`permissions: contents: read`) and every action pinned to a commit SHA. A single job starts PostgreSQL 16 and Redis 7 as service containers and sets the same values that `test/test-env.ts` uses as defaults, including `WEBHOOK_SECRET=test-webhook-secret-value`. Its steps, in order:
 
 1. `npm ci` on Node 22.
 2. Terraform on `infra/terraform`: `fmt -check`, `init -backend=false` and `validate`.
@@ -96,7 +96,7 @@ DATABASE_URL=postgres://app:app@localhost:5432/transaction_event_gateway bash sc
 npm audit --omit=dev
 ```
 
-Dependabot (`.github/dependabot.yml`) opens grouped weekly pull requests for npm packages (NestJS packages in one group, other production and development dependencies in two more) and for GitHub Actions. Major npm versions are excluded. CI runs on these pull requests.
+Dependabot (`.github/dependabot.yml`) opens grouped weekly pull requests for npm packages (NestJS packages in one group, other production and development dependencies in two more) and for GitHub Actions, where it updates the pinned SHAs together with their version comments. Major npm versions are excluded. CI runs on these pull requests.
 
 ## Schema drift check
 
