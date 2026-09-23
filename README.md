@@ -35,7 +35,7 @@ Production-style NestJS backend for idempotent payment intents, signed webhook i
 - Transactional outbox between webhook acceptance and BullMQ publication.
 - Separate worker process for outbox dispatch and idempotent webhook processing.
 - Durable worker decisions through PostgreSQL row locks, state checks, and processing attempt records.
-- Swagger/OpenAPI docs plus liveness and readiness endpoints.
+- Swagger/OpenAPI docs with request, response, and error schemas, plus liveness and readiness endpoints.
 - Structured request and application logging with correlation IDs.
 - Local Docker Compose infrastructure, e2e coverage, worker/BullMQ coverage, and a repeatable smoke script.
 - AWS Terraform scaffold for ECR, security groups, ALB, private RDS PostgreSQL, private ElastiCache Redis, ECS Fargate task definitions/services, task log groups, minimal ECS task execution IAM, and private VPC endpoint egress.
@@ -74,7 +74,7 @@ Detailed documentation:
 
 ## Screenshots
 
-Swagger UI shows the generated OpenAPI surface exposed by the running service.
+Swagger UI shows the operations of the running service and the request, response, and error schemas of its generated OpenAPI document.
 
 ![Swagger UI](docs/assets/swagger-ui.png)
 
