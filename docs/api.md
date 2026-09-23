@@ -327,7 +327,7 @@ The payload is not persisted and no outbox event is created when signature valid
 - `eventId` is required and limited to 255 characters.
 - `type` is required and limited to 128 characters.
 - `paymentIntentId` is required for MVP processing events and must be a UUID.
-- `txHash` is optional at transport level but required for confirmed transaction events.
+- `txHash` is optional at transport level but required for confirmed transaction events. Surrounding whitespace is removed and a `0x`-prefixed hexadecimal hash is lowercased before the event is stored, so the payload hash, duplicate detection, and confirmation all use that form; other formats, such as base58 signatures, keep their case. A value with whitespace inside is rejected.
 - `amount` and `asset` must match the referenced payment intent during worker processing.
 - `reference` is not part of the signed webhook body; unknown fields are rejected by DTO validation before worker processing.
 
@@ -353,7 +353,7 @@ Deduplication keys:
 
 Rules:
 
-- Same provider event ID and same payload hash returns an idempotent accepted response.
+- Same provider event ID and same payload hash returns an idempotent accepted response. The hash covers the normalized payload, so a redelivery that only spells the transaction hash differently is a duplicate.
 - Same provider event ID and different payload hash returns `409 Conflict`.
 - Same provider nonce reused for a different event returns `409 Conflict`.
 - Accepted events are written to `webhook_events` before any asynchronous processing.

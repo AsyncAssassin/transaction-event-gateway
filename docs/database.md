@@ -73,7 +73,7 @@ Correctness rationale:
 
 - Primary key gives stable durable identity for API responses and worker references.
 - Positive amount check prevents invalid persisted payment state.
-- Unique confirmed transaction hash prevents one external transaction from confirming multiple intents.
+- Unique confirmed transaction hash prevents one external transaction from confirming multiple intents. The worker writes and compares hashes in canonical form (trimmed, `0x`-prefixed hexadecimal lowercased), so the index also catches another spelling of the same hash.
 - Status and time indexes support operational queries. No expiration job exists yet.
 - Client request and reference indexes support correlation without making those values authoritative identifiers.
 
@@ -227,6 +227,8 @@ Correctness rationale:
 7. Create `webhook_processing_attempts`.
 8. Add secondary indexes and partial unique indexes.
 9. Add foreign keys after referenced tables exist. In the MVP this applies to `webhook_processing_attempts.webhook_event_id`, not to `webhook_events.payment_intent_id`.
+
+Later migrations: `1783000000000-AddOutboxDeadAt` adds `outbox_events.dead_at` and its partial index. `1790150000000-NormalizeConfirmedTxHashes` rewrites stored `confirmed_tx_hash` values in canonical form, except hashes that several payment intents share (see the [runbook](runbook.md#transaction-hash-that-confirmed-several-payment-intents)); its `down` changes nothing, because the original spelling is not kept.
 
 Keep migrations small enough to review and roll back. Do not combine unrelated schema changes with data backfills.
 

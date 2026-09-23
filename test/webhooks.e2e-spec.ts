@@ -121,6 +121,64 @@ describe('Blockchain webhooks (e2e)', () => {
     });
   });
 
+  it('stores the transaction hash in canonical form', async () => {
+    const response = await sendSignedWebhook({
+      app,
+      payload: { ...basePayload, txHash: ' 0xABCDEF01 ' },
+      nonce: 'nonce_canonical_hash',
+    }).expect(202);
+
+    expect(response.body).toEqual({ eventId: 'evt_123', status: 'ACCEPTED' });
+    const rows = (await dataSource.query(
+      'SELECT tx_hash AS "txHash", payload FROM webhook_events',
+    )) as Array<{ txHash: string; payload: { txHash: string } }>;
+    expect(rows).toEqual([
+      {
+        txHash: '0xabcdef01',
+        payload: expect.objectContaining({ txHash: '0xabcdef01' }),
+      },
+    ]);
+  });
+
+  it('treats a redelivery that spells the transaction hash differently as a duplicate', async () => {
+    await sendSignedWebhook({
+      app,
+      payload: { ...basePayload, txHash: '0xABCDEF01' },
+      nonce: 'nonce_first_spelling',
+    }).expect(202);
+
+    const redelivery = await sendSignedWebhook({
+      app,
+      payload: { ...basePayload, txHash: '0xabcdef01' },
+      nonce: 'nonce_second_spelling',
+    }).expect(202);
+
+    expect(redelivery.body).toEqual({
+      eventId: 'evt_123',
+      status: 'ALREADY_ACCEPTED',
+    });
+    await expectTableCount(dataSource, 'webhook_events', 1);
+  });
+
+  it('rejects a transaction hash with whitespace inside', async () => {
+    const response = await sendSignedWebhook({
+      app,
+      payload: { ...basePayload, txHash: '0xabc def' },
+      nonce: 'nonce_split_hash',
+    }).expect(400);
+
+    expect(response.body).toMatchObject({
+      error: 'VALIDATION_ERROR',
+      details: [
+        {
+          field: 'txHash',
+          message: 'txHash must be one value without whitespace inside',
+        },
+      ],
+    });
+    await expectTableCount(dataSource, 'webhook_events', 0);
+  });
+
   it('stores the request correlation ID in the outbox payload and logs the webhook event ID', async () => {
     const log = jest.spyOn(Logger.prototype, 'log');
 

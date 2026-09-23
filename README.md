@@ -410,7 +410,7 @@ The smoke script checks health, OpenAPI, payment intent idempotency, signed webh
 - **Worker crash or retry**: PostgreSQL rollback and BullMQ retry preserve correctness; already processed events complete safely.
 - **Lost or exhausted job**: a webhook event still `QUEUED` 10 minutes after its job was published is published again by the worker's outbox reconciliation.
 - **Unknown payment intent**: worker marks the webhook event `FAILED` with `UNKNOWN_PAYMENT_INTENT`.
-- **Mismatch failures**: amount, asset, terminal-state, or confirmed transaction hash conflicts fail the webhook without corrupting payment intent state.
+- **Mismatch failures**: amount, asset, terminal-state, or confirmed transaction hash conflicts fail the webhook without corrupting payment intent state. Transaction hashes are compared in canonical form, so another spelling of a hash cannot confirm a second intent.
 
 ## Project Status
 
