@@ -141,6 +141,48 @@ describe('Webhook event processor (e2e)', () => {
     ]);
   });
 
+  it('keeps a FAILED event final when a later job arrives after its payment intent was created', async () => {
+    const paymentIntentId = randomUUID();
+    const webhookEventId = await insertWebhookEvent(dataSource, {
+      paymentIntentId,
+      txHash: '0xarrived-before-intent',
+    });
+
+    await expect(
+      processor.processWebhookEvent({ webhookEventId, jobId: 'job-first' }),
+    ).resolves.toEqual({ status: 'failed', reason: 'UNKNOWN_PAYMENT_INTENT' });
+
+    await insertPaymentIntent(dataSource, { id: paymentIntentId });
+
+    await expect(
+      processor.processWebhookEvent({ webhookEventId, jobId: 'job-duplicate' }),
+    ).resolves.toEqual({
+      status: 'already_failed',
+      reason: 'UNKNOWN_PAYMENT_INTENT',
+    });
+
+    await expectPaymentIntent(dataSource, paymentIntentId, {
+      status: 'CREATED',
+      confirmedTxHash: null,
+    });
+    await expectWebhookEvent(dataSource, webhookEventId, {
+      status: 'FAILED',
+      failureReason: 'UNKNOWN_PAYMENT_INTENT',
+    });
+    await expectAttemptRows(dataSource, webhookEventId, [
+      {
+        jobId: 'job-first',
+        status: 'FAILED',
+        errorMessage: 'UNKNOWN_PAYMENT_INTENT',
+      },
+      {
+        jobId: 'job-duplicate',
+        status: 'FAILED',
+        errorMessage: 'UNKNOWN_PAYMENT_INTENT',
+      },
+    ]);
+  });
+
   it('marks amount mismatch as FAILED without mutating the payment intent', async () => {
     const paymentIntentId = await insertPaymentIntent(dataSource, {
       amount: '125.50',
@@ -483,6 +525,7 @@ describe('Webhook event processor (e2e)', () => {
 async function insertPaymentIntent(
   dataSource: DataSource,
   overrides: Partial<{
+    id: string;
     status: PaymentIntentStatus;
     amount: string;
     asset: string;
@@ -490,7 +533,7 @@ async function insertPaymentIntent(
     confirmedTxHash: string | null;
   }> = {},
 ): Promise<string> {
-  const paymentIntentId = randomUUID();
+  const paymentIntentId = overrides.id ?? randomUUID();
 
   await dataSource.query(
     `

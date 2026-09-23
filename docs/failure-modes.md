@@ -224,7 +224,7 @@ Expected behavior:
 - Webhook acceptance may still persist the event and outbox row after signature validation.
 - Worker marks the event `FAILED` with reason `UNKNOWN_PAYMENT_INTENT`.
 - No payment intent is created from the webhook.
-- The event is not retried later, so a webhook that arrives before its payment intent stays `FAILED`.
+- `FAILED` is final: a later job for the event, for example a duplicate publish that arrives after the payment intent was created, records an attempt and changes nothing. A webhook that arrives before its payment intent therefore stays `FAILED` until an operator re-drives it (see the [runbook](runbook.md#re-drive-a-failed-webhook-event)).
 
 Protection:
 

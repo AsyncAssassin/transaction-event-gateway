@@ -40,13 +40,11 @@ stateDiagram-v2
     RECEIVED --> FAILED: worker
     QUEUED --> PROCESSED: worker
     QUEUED --> FAILED: worker
-    FAILED --> PROCESSED: worker, on a duplicate job
-    FAILED --> FAILED: worker, on a duplicate job
 ```
 
-- The worker processes an event in any status other than `PROCESSED`. It usually finds `QUEUED`. It finds `RECEIVED` when it locks the row before the dispatcher's transaction marks it `QUEUED`; once the worker has committed, the dispatcher's conditional update changes nothing.
-- `PROCESSED` is final. A later job for the event records a `SUCCEEDED` attempt and changes nothing else.
-- Nothing re-queues a `FAILED` event on purpose: reconciliation only looks at `RECEIVED` and `QUEUED` events, and there is no retry endpoint. A duplicate job for a `FAILED` event, for example one published again after a dispatcher transaction rolled back, runs the rules again against the current payment intent.
+- The worker processes an event in any status other than `PROCESSED` and `FAILED`. It usually finds `QUEUED`. It finds `RECEIVED` when it locks the row before the dispatcher's transaction marks it `QUEUED`; once the worker has committed, the dispatcher's conditional update changes nothing.
+- `PROCESSED` and `FAILED` are final. A later job for the event, for example one published again after a dispatcher transaction rolled back, records an attempt with the stored outcome (`SUCCEEDED`, or `FAILED` with the stored reason) and changes nothing else, even if the payment intent has changed since.
+- Nothing re-queues a `FAILED` event: reconciliation only looks at `RECEIVED` and `QUEUED` events, and there is no retry endpoint. When the cause of a failure is gone, for example the payment intent that the webhook named has been created since, an operator re-drives the event with SQL (see the [runbook](runbook.md#re-drive-a-failed-webhook-event)).
 - An exception inside the worker transaction restores the previous status. After five failed attempts the event therefore keeps its previous status, normally `QUEUED`, and a `QUEUED` event waits until reconciliation re-queues its outbox row (see [Outbox event](#outbox-event)).
 - `processed_at` is set when the worker commits `PROCESSED` or `FAILED`.
 
@@ -55,7 +53,7 @@ stateDiagram-v2
 The worker runs these steps in one transaction and stops at the first one that decides the outcome. Every failure marks the webhook `FAILED` with the reason and leaves the payment intent unchanged.
 
 1. Lock the webhook row (`SELECT ... FOR UPDATE`). If the row does not exist, the worker throws `WEBHOOK_EVENT_NOT_FOUND`; the exception fails the job attempt and BullMQ retries it.
-2. The event is `PROCESSED`: record a `SUCCEEDED` attempt and return `already_processed`.
+2. The event is `PROCESSED`: record a `SUCCEEDED` attempt and return `already_processed`. The event is `FAILED`: record a `FAILED` attempt with the stored `failure_reason` and return `already_failed`.
 3. Set `PROCESSING` and clear `failure_reason` and `processed_at`.
 4. `payload.type` is not `transaction.confirmed`: `UNSUPPORTED_EVENT_TYPE`.
 5. `payload.txHash` is not a non-empty string: `MISSING_TX_HASH`. From here on the hash is used in canonical form: trimmed, and lowercased when it is `0x`-prefixed hexadecimal. The API stores it that way; the worker normalizes again for events stored before it did.
@@ -73,6 +71,7 @@ These seven reasons are the complete set (`ProcessingFailureReason` in `src/proc
 | Result | Webhook | Payment intent | Attempt row | BullMQ job |
 | --- | --- | --- | --- | --- |
 | `already_processed` | Unchanged | Unchanged | `SUCCEEDED` | Completes; logged as `worker_job_processed` |
+| `already_failed` | Unchanged | Unchanged | `FAILED`, stored reason in `error_message` | Completes; logged as `worker_job_processed` with status `ALREADY_FAILED` and the reason as `errorCode` |
 | `processed` | `PROCESSED` | `CONFIRMED`, unless it already was with the same hash | `SUCCEEDED` | Completes; logged as `worker_job_processed` |
 | `failed` with a reason | `FAILED` with the reason | Unchanged | `FAILED`, reason in `error_message` | Completes; logged as `worker_job_failed` (warn) with the reason as `errorCode` |
 | Exception | Previous status (rollback) | Unchanged (rollback) | None (rollback) | The attempt fails and BullMQ retries it, up to 5 attempts. Failed attempts are logged as `worker_job_failed`, and the fifth, final failure as `worker_job_exhausted`. |
@@ -123,7 +122,7 @@ A row is due for dispatch when `dead_at` is null and it is `PENDING`, or `FAILED
 `webhook_processing_attempts` records worker decisions for operators; correctness never depends on it. Rows are inserted inside the worker transaction:
 
 - `SUCCEEDED` for `processed` and `already_processed`, with `error_message` null;
-- `FAILED` for a domain failure, with the reason in `error_message`.
+- `FAILED` for a domain failure and for a later job of a `FAILED` event, with the reason in `error_message`.
 
 `job_id` holds the BullMQ job ID. `STARTED` is allowed by the check constraint but never written. An attempt that throws leaves no row, because the insert rolls back with the rest of the transaction; such failures are visible only in the worker log and in BullMQ.
 
