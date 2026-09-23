@@ -36,6 +36,8 @@ export class BlockchainWebhookDto {
   paymentIntentId!: string;
 
   @ApiPropertyOptional({
+    description:
+      'Required for transaction.confirmed. Surrounding whitespace is removed and a 0x-prefixed hexadecimal hash is lowercased before the hash is stored or compared; other formats keep their case.',
     example: '0xtest123',
     maxLength: 255,
   })
@@ -46,6 +48,9 @@ export class BlockchainWebhookDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(255)
+  @Matches(/^\s*\S+\s*$/, {
+    message: 'txHash must be one value without whitespace inside',
+  })
   txHash?: string;
 
   @ApiProperty({

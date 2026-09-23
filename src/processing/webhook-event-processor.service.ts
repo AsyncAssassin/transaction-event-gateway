@@ -9,6 +9,7 @@ import {
   WebhookProcessingAttemptEntity,
   WebhookProcessingAttemptStatus,
 } from '../database/entities';
+import { normalizeTxHash } from '../webhooks/tx-hash';
 
 export type ProcessWebhookEventInput = {
   webhookEventId: string;
@@ -126,6 +127,10 @@ export class WebhookEventProcessorService {
       });
     }
 
+    // Accepted payloads are already normalized; events accepted before that
+    // can still hold another spelling of a hash.
+    const txHash = normalizeTxHash(payload.txHash);
+
     const paymentIntent = await this.lockPaymentIntent(manager, webhookEvent);
     if (!paymentIntent) {
       return this.failWebhookEvent(manager, {
@@ -150,7 +155,7 @@ export class WebhookEventProcessorService {
     }
 
     if (paymentIntent.status === PaymentIntentStatus.Confirmed) {
-      if (paymentIntent.confirmedTxHash === payload.txHash) {
+      if (paymentIntent.confirmedTxHash === txHash) {
         return this.markWebhookProcessed(manager, {
           webhookEvent,
           jobId,
@@ -179,7 +184,7 @@ export class WebhookEventProcessorService {
     }
 
     const existingConfirmedIntent = await manager.findOne(PaymentIntentEntity, {
-      where: { confirmedTxHash: payload.txHash },
+      where: { confirmedTxHash: txHash },
       lock: { mode: 'pessimistic_write' },
     });
 
@@ -196,7 +201,7 @@ export class WebhookEventProcessorService {
     }
 
     paymentIntent.status = PaymentIntentStatus.Confirmed;
-    paymentIntent.confirmedTxHash = payload.txHash;
+    paymentIntent.confirmedTxHash = txHash;
     paymentIntent.failureReason = null;
 
     await manager.save(paymentIntent);

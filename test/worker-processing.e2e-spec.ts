@@ -353,6 +353,59 @@ describe('Webhook event processor (e2e)', () => {
     });
   });
 
+  it('treats another spelling of a confirmed transaction hash as the same transaction', async () => {
+    await insertPaymentIntent(dataSource, {
+      status: PaymentIntentStatus.Confirmed,
+      confirmedTxHash: '0xabcdef02',
+    });
+    const targetPaymentIntentId = await insertPaymentIntent(dataSource);
+    // Stored before acceptance normalized hashes.
+    const webhookEventId = await insertWebhookEvent(dataSource, {
+      paymentIntentId: targetPaymentIntentId,
+      txHash: ' 0xABCDEF02 ',
+    });
+
+    await expect(
+      processor.processWebhookEvent({ webhookEventId, jobId: 'job-spelling' }),
+    ).resolves.toEqual({
+      status: 'failed',
+      reason: 'CONFIRMED_TX_HASH_CONFLICT',
+    });
+
+    await expectPaymentIntent(dataSource, targetPaymentIntentId, {
+      status: 'CREATED',
+      confirmedTxHash: null,
+    });
+  });
+
+  it('confirms with the canonical hash and accepts the same hash in another spelling later', async () => {
+    const paymentIntentId = await insertPaymentIntent(dataSource);
+    const firstWebhookEventId = await insertWebhookEvent(dataSource, {
+      paymentIntentId,
+      txHash: '0xABCDEF03',
+    });
+    const secondWebhookEventId = await insertWebhookEvent(dataSource, {
+      paymentIntentId,
+      txHash: ' 0xabcdef03 ',
+    });
+
+    await expect(
+      processor.processWebhookEvent({ webhookEventId: firstWebhookEventId }),
+    ).resolves.toEqual({ status: 'processed' });
+    await expect(
+      processor.processWebhookEvent({ webhookEventId: secondWebhookEventId }),
+    ).resolves.toEqual({ status: 'processed' });
+
+    await expectPaymentIntent(dataSource, paymentIntentId, {
+      status: 'CONFIRMED',
+      confirmedTxHash: '0xabcdef03',
+    });
+    await expectWebhookEvent(dataSource, secondWebhookEventId, {
+      status: 'PROCESSED',
+      failureReason: null,
+    });
+  });
+
   it('rolls back and leaves state unchanged when the transaction throws before commit', async () => {
     const paymentIntentId = await insertPaymentIntent(dataSource);
     const webhookEventId = await insertWebhookEvent(dataSource, {

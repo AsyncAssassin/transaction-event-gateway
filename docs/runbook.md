@@ -170,6 +170,16 @@ docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "UPD
 - Read the latest `webhook_processing_attempts.error_message`.
 - Compare the webhook payload against the referenced `payment_intents` row for amount, asset, current status, and transaction hash. `reference` is not part of the signed webhook DTO; unknown `reference` fields are rejected before worker processing.
 
+### Transaction hash that confirmed several payment intents
+
+Transaction hashes are stored and compared in canonical form. Before that, one transaction could confirm several payment intents when the provider spelled its hash differently, for example in another letter case. The migration `NormalizeConfirmedTxHashes` leaves such rows as they are; list them with:
+
+```bash
+docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT canonical, array_agg(id) AS payment_intent_ids FROM (SELECT id, CASE WHEN btrim(confirmed_tx_hash, E' \t\n\r') ~* '^0x[0-9a-f]+$' THEN lower(btrim(confirmed_tx_hash, E' \t\n\r')) ELSE btrim(confirmed_tx_hash, E' \t\n\r') END AS canonical FROM payment_intents WHERE confirmed_tx_hash IS NOT NULL) hashes GROUP BY canonical HAVING count(*) > 1;"
+```
+
+Each row is one transaction that confirmed more than one intent. Decide from the provider's records which confirmation stands; the service has no automatic resolution.
+
 ## Webhook Failure Reasons
 
 - `UNKNOWN_PAYMENT_INTENT`: the webhook references a payment intent ID that does not exist.

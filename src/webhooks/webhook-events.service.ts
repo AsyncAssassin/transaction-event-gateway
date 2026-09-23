@@ -28,6 +28,7 @@ import {
   WebhookEventStatus,
 } from '../database/entities';
 import { BlockchainWebhookDto } from './dto/blockchain-webhook.dto';
+import { normalizeTxHash } from './tx-hash';
 import {
   hasValidWebhookSignatureFormat,
   verifyWebhookSignature,
@@ -375,7 +376,9 @@ export class WebhookEventsService {
       eventId: dto.eventId,
       type: dto.type,
       paymentIntentId: dto.paymentIntentId,
-      txHash: dto.txHash ?? null,
+      // Normalized before hashing, so another spelling of the same hash in a
+      // redelivery is a duplicate, not a payload conflict.
+      txHash: dto.txHash === undefined ? null : normalizeTxHash(dto.txHash),
       amount: dto.amount,
       asset: dto.asset,
     };

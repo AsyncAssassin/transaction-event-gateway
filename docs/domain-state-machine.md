@@ -58,7 +58,7 @@ The worker runs these steps in one transaction and stops at the first one that d
 2. The event is `PROCESSED`: record a `SUCCEEDED` attempt and return `already_processed`.
 3. Set `PROCESSING` and clear `failure_reason` and `processed_at`.
 4. `payload.type` is not `transaction.confirmed`: `UNSUPPORTED_EVENT_TYPE`.
-5. `payload.txHash` is not a non-empty string: `MISSING_TX_HASH`.
+5. `payload.txHash` is not a non-empty string: `MISSING_TX_HASH`. From here on the hash is used in canonical form: trimmed, and lowercased when it is `0x`-prefixed hexadecimal. The API stores it that way; the worker normalizes again for events stored before it did.
 6. Lock the payment intent named by `payment_intent_id`. If none exists: `UNKNOWN_PAYMENT_INTENT`. Payment intents are never created from webhooks.
 7. The amounts differ when compared as decimals with 18 fractional digits (`"125.5"` matches a stored `125.50`): `AMOUNT_MISMATCH`. The assets differ: `ASSET_MISMATCH`. Only amount and asset are compared; the signed webhook carries no `reference`.
 8. The intent is `CONFIRMED`: with the same `confirmed_tx_hash`, mark the webhook `PROCESSED` without changing the intent; with another hash, `PAYMENT_INTENT_TERMINAL`.

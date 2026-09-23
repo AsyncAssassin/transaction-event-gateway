@@ -252,6 +252,7 @@ Protection:
 
 - Unique `(provider, external_event_id)` plus `payload_hash`.
 - Worker validation for amount, asset, transaction hash, and state transition rules. `reference` is not part of the signed webhook DTO, so an unknown `reference` field is rejected before worker processing.
+- Transaction hashes are stored and compared in canonical form (trimmed, `0x`-prefixed hexadecimal lowercased), so another spelling of a hash that already confirmed an intent fails with `CONFIRMED_TX_HASH_CONFLICT` instead of confirming a second intent.
 
 ## Known Limitations
 
