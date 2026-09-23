@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 
 import { AppModule } from '../src/app.module';
 import { configureHttpApp } from '../src/common/bootstrap';
+import { hashCanonicalJson } from '../src/common/canonicalization/canonical-json';
 import { createWebhookSignature } from '../src/webhooks/security/webhook-signature';
 
 type CountRow = {
@@ -157,6 +158,54 @@ describe('Blockchain webhooks (e2e)', () => {
       eventId: 'evt_123',
       status: 'ALREADY_ACCEPTED',
     });
+    await expectTableCount(dataSource, 'webhook_events', 1);
+  });
+
+  it('accepts redeliveries of an event stored before transaction hashes were normalized', async () => {
+    // As stored before normalization: the hash as sent, and a payload hash over it.
+    const legacyPayload = { ...basePayload, txHash: '0xABCDEF0D' };
+    await dataSource.query(
+      `
+        INSERT INTO webhook_events (
+          provider, external_event_id, nonce, event_type, payment_intent_id,
+          tx_hash, payload, payload_hash, status, received_at
+        )
+        VALUES (
+          'blockchain', $1, 'nonce_legacy', 'transaction.confirmed', $2,
+          $3, $4::jsonb, $5, 'PROCESSED', now()
+        )
+      `,
+      [
+        legacyPayload.eventId,
+        legacyPayload.paymentIntentId,
+        legacyPayload.txHash,
+        JSON.stringify(legacyPayload),
+        hashCanonicalJson(legacyPayload),
+      ],
+    );
+
+    for (const [nonce, txHash] of [
+      ['nonce_legacy_same', '0xABCDEF0D'],
+      ['nonce_legacy_lower', '0xabcdef0d'],
+    ]) {
+      const response = await sendSignedWebhook({
+        app,
+        payload: { ...basePayload, txHash },
+        nonce,
+      }).expect(202);
+
+      expect(response.body).toEqual({
+        eventId: 'evt_123',
+        status: 'ALREADY_ACCEPTED',
+      });
+    }
+
+    const conflict = await sendSignedWebhook({
+      app,
+      payload: { ...basePayload, txHash: '0xABCDEF0D', amount: '999.00' },
+      nonce: 'nonce_legacy_other_amount',
+    }).expect(409);
+    expect(conflict.body).toMatchObject({ error: 'WEBHOOK_EVENT_CONFLICT' });
     await expectTableCount(dataSource, 'webhook_events', 1);
   });
 

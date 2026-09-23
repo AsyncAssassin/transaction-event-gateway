@@ -184,13 +184,26 @@ The previous attempts stay in `webhook_processing_attempts`.
 
 ### Transaction hash that confirmed several payment intents
 
-Transaction hashes are stored and compared in canonical form. Before that, one transaction could confirm several payment intents when the provider spelled its hash differently, for example in another letter case. The migration `NormalizeConfirmedTxHashes` leaves such rows as they are; list them with:
+Transaction hashes are stored and compared in canonical form. Before that, one transaction could confirm several payment intents when the provider spelled its hash differently, for example in another letter case. For such a transaction, the migration `NormalizeConfirmedTxHashes` gave the canonical spelling to one intent (the one that already had it, or else the earliest confirmation), so later webhooks with that transaction fail with `CONFIRMED_TX_HASH_CONFLICT`, and left the others as they were. List these transactions with:
 
 ```bash
-docker compose exec -T postgres psql -U app -d transaction_event_gateway -c "SELECT canonical, array_agg(id) AS payment_intent_ids FROM (SELECT id, CASE WHEN btrim(confirmed_tx_hash, E' \t\n\r') ~* '^0x[0-9a-f]+$' THEN lower(btrim(confirmed_tx_hash, E' \t\n\r')) ELSE btrim(confirmed_tx_hash, E' \t\n\r') END AS canonical FROM payment_intents WHERE confirmed_tx_hash IS NOT NULL) hashes GROUP BY canonical HAVING count(*) > 1;"
+docker compose exec -T postgres psql -U app -d transaction_event_gateway <<'SQL'
+WITH trimmed AS (
+  SELECT id, updated_at,
+    btrim(confirmed_tx_hash, U&' \0009\000A\000B\000C\000D\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF') AS value
+  FROM payment_intents
+  WHERE confirmed_tx_hash IS NOT NULL
+)
+SELECT
+  CASE WHEN value ~ '^0[xX][0-9a-fA-F]+$' THEN lower(value) ELSE value END AS tx_hash,
+  array_agg(id ORDER BY updated_at) AS payment_intent_ids
+FROM trimmed
+GROUP BY 1
+HAVING count(*) > 1;
+SQL
 ```
 
-Each row is one transaction that confirmed more than one intent. Decide from the provider's records which confirmation stands; the service has no automatic resolution.
+Each row is one transaction that confirmed more than one intent, earliest confirmation first. Decide from the provider's records which confirmation stands; the service has no automatic resolution. The spelling each confirmation arrived in is in `webhook_events.tx_hash` of the event that confirmed the intent.
 
 ## Webhook Failure Reasons
 

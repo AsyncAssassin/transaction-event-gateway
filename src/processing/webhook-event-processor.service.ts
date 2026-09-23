@@ -178,7 +178,11 @@ export class WebhookEventProcessorService {
     }
 
     if (paymentIntent.status === PaymentIntentStatus.Confirmed) {
-      if (paymentIntent.confirmedTxHash === txHash) {
+      // A hash confirmed before normalization can keep another spelling.
+      if (
+        paymentIntent.confirmedTxHash !== null &&
+        normalizeTxHash(paymentIntent.confirmedTxHash) === txHash
+      ) {
         return this.markWebhookProcessed(manager, {
           webhookEvent,
           jobId,

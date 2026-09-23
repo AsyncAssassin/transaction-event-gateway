@@ -228,7 +228,7 @@ Correctness rationale:
 8. Add secondary indexes and partial unique indexes.
 9. Add foreign keys after referenced tables exist. In the MVP this applies to `webhook_processing_attempts.webhook_event_id`, not to `webhook_events.payment_intent_id`.
 
-Later migrations: `1783000000000-AddOutboxDeadAt` adds `outbox_events.dead_at` and its partial index. `1790150000000-NormalizeConfirmedTxHashes` rewrites stored `confirmed_tx_hash` values in canonical form, except hashes that several payment intents share (see the [runbook](runbook.md#transaction-hash-that-confirmed-several-payment-intents)); its `down` changes nothing, because the original spelling is not kept.
+Later migrations: `1783000000000-AddOutboxDeadAt` adds `outbox_events.dead_at` and its partial index. `1790150000000-NormalizeConfirmedTxHashes` rewrites stored `confirmed_tx_hash` values in canonical form, computed in SQL exactly as in `src/webhooks/tx-hash.ts`. When one transaction had already confirmed several payment intents in different spellings, only one of them gets the canonical value (the one that already had it, or else the earliest confirmation), which keeps the unique index valid and lets later webhooks with that transaction be recognized; the others keep their spelling for an operator (see the [runbook](runbook.md#transaction-hash-that-confirmed-several-payment-intents)). Its `down` changes nothing: the previous code works with canonical hashes too, and the spelling a hash arrived in stays in `webhook_events.tx_hash` and `payload` of the event that confirmed the intent.
 
 Keep migrations small enough to review and roll back. Do not combine unrelated schema changes with data backfills.
 

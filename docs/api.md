@@ -353,7 +353,7 @@ Deduplication keys:
 
 Rules:
 
-- Same provider event ID and same payload hash returns an idempotent accepted response. The hash covers the normalized payload, so a redelivery that only spells the transaction hash differently is a duplicate.
+- Same provider event ID and same payload hash returns an idempotent accepted response. The hash covers the normalized payload, so a redelivery that only spells the transaction hash differently is a duplicate; for an event stored before hashes were normalized, the stored payload is normalized for this comparison.
 - Same provider event ID and different payload hash returns `409 Conflict`.
 - Same provider nonce reused for a different event returns `409 Conflict`.
 - Accepted events are written to `webhook_events` before any asynchronous processing.
