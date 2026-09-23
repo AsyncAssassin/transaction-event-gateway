@@ -51,20 +51,29 @@ describe('Rate limiting (e2e)', () => {
     }
   });
 
-  it('returns 429 once the per-window request limit is exceeded', async () => {
-    const statuses: number[] = [];
+  it('returns 429 RATE_LIMITED once the per-window request limit is exceeded', async () => {
+    const responses: request.Response[] = [];
 
     // The throttler guard runs before the handler, so requests that would
     // otherwise fail validation still count toward the limit.
     for (let i = 0; i < 5; i += 1) {
-      const response = await request(app.getHttpServer())
-        .post('/payment-intents')
-        .send({});
-      statuses.push(response.status);
+      responses.push(
+        await request(app.getHttpServer()).post('/payment-intents').send({}),
+      );
     }
 
+    const statuses = responses.map((response) => response.status);
     expect(statuses.slice(0, 3).every((status) => status !== 429)).toBe(true);
     expect(statuses.slice(3)).toEqual([429, 429]);
+
+    const limited = responses[4]!;
+    expect(limited.body).toEqual({
+      error: 'RATE_LIMITED',
+      message:
+        'Too many requests; retry after the delay in the Retry-After header.',
+      correlationId: limited.headers['x-correlation-id'],
+    });
+    expect(limited.headers['retry-after']).toMatch(/^[1-9]\d*$/);
   });
 
   it('does not rate limit health endpoints', async () => {
