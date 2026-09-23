@@ -343,9 +343,10 @@ function validatePayloadMatchesPaymentIntent(
     return 'ASSET_MISMATCH';
   }
 
-  // Reference is intentionally not validated here: the signed webhook contract
-  // (BlockchainWebhookDto) carries no reference field and forbidNonWhitelisted
-  // rejects any extra property, so a reference can never reach this payload.
+  // Reference and destination are not validated here: the signed webhook
+  // contract (BlockchainWebhookDto) carries neither, and forbidNonWhitelisted
+  // rejects any extra property, so neither can reach this payload. The
+  // confirmation trusts the provider on where the funds went.
   return null;
 }
 
