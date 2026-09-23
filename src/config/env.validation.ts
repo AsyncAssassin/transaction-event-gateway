@@ -36,4 +36,6 @@ export const envValidationSchema = Joi.object({
   RATE_LIMIT_TTL_SECONDS: Joi.number().integer().positive().default(60),
   RATE_LIMIT_LIMIT: Joi.number().integer().positive().default(100),
   SWAGGER_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
+  // Without a value, the log format follows NODE_ENV (resolveLogFormat).
+  LOG_FORMAT: Joi.string().valid('json', 'text'),
 });

@@ -4,6 +4,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 
 import { AppModule } from './app.module';
 import { configureHttpApp } from './common/bootstrap';
+import { createAppLogger } from './common/logging/app-logger';
 import { setupOpenApi } from './common/openapi/openapi';
 
 function isSwaggerEnabled(): boolean {
@@ -15,7 +16,7 @@ function isSwaggerEnabled(): boolean {
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    bufferLogs: true,
+    logger: createAppLogger(),
     rawBody: true,
   });
   const logger = new Logger('Bootstrap');

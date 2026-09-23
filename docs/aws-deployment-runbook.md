@@ -46,7 +46,7 @@ Required before the first apply: copy `infra/terraform/example.tfvars` to `infra
 
 - `allowed_http_cidrs = ["<your-ip>/32"]` instead of the open default.
 - `api_desired_count = 0` and `worker_desired_count = 0`; they are raised after the migration.
-- `NO_COLOR = "1"` in `app_environment_variables`, so CloudWatch log lines carry no ANSI color codes; keep `PORT` there equal to `app_port`.
+- If `app_environment_variables` sets `PORT`, keep it equal to `app_port`.
 
 The runtime secrets are populated after the first apply, which creates them.
 
@@ -175,11 +175,13 @@ unset WEBHOOK_SECRET SIGNATURE
 The first command prints the new payment intent ID (a UUID); the webhook returns `202` with `"status":"ACCEPTED"`. Within a few seconds the worker publishes and processes the event:
 
 ```bash
-aws logs tail "/ecs/$NAME_PREFIX/worker" --since 10m --filter-pattern '?"outbox_dispatch_published" ?"worker_job_processed"'
-aws logs tail "/ecs/$NAME_PREFIX/api" --since 10m --filter-pattern "\"$SMOKE_ID\""
+aws logs tail "/ecs/$NAME_PREFIX/worker" --since 10m \
+  --filter-pattern '{ $.event = "outbox_dispatch_published" || $.event = "worker_job_processed" }'
+aws logs tail "/ecs/$NAME_PREFIX/api" --since 10m \
+  --filter-pattern "{ \$.correlationId = \"$SMOKE_ID\" || \$.correlationId = \"$SMOKE_ID-webhook\" }"
 ```
 
-The check passes when the API log shows `webhook_accepted` for `evt_$SMOKE_ID`, the worker log shows `outbox_dispatch_published` followed by `worker_job_processed` with `"status":"PROCESSED"` for the same `webhookEventId`, and the payment intent reports the confirmation. Worker events carry the internal `webhookEventId`, not the provider `eventId`; on an otherwise idle environment the pair right after the webhook belongs to the smoke request. A `worker_job_failed` event carries the failure reason in `errorCode` instead. Each log line is a Nest console prefix followed by the JSON event, so use quoted text filter patterns like these, not JSON filter patterns.
+The check passes when the API log shows `webhook_accepted` for `evt_$SMOKE_ID`, the worker log shows `outbox_dispatch_published` followed by `worker_job_processed` with `"status":"PROCESSED"` for the same `webhookEventId`, and the payment intent reports the confirmation. Worker events carry the internal `webhookEventId`, not the provider `eventId`; on an otherwise idle environment the pair right after the webhook belongs to the smoke request. A `worker_job_failed` event carries the failure reason in `errorCode` instead. Each log line is one JSON object, so the filter patterns match its fields.
 
 ```bash
 curl -sS "$BASE_URL/payment-intents/$PAYMENT_INTENT_ID" | jq '{status, confirmedTxHash}'
@@ -210,8 +212,8 @@ Log events:
 
 ```bash
 aws logs tail "/ecs/$NAME_PREFIX/worker" --since 1h --filter-pattern \
-  '?"outbox_dispatch_failed" ?"worker_job_exhausted" ?"outbox_reconcile_requeued" ?"worker_error" ?"outbox_dispatch_runner_failed"'
-aws logs tail "/ecs/$NAME_PREFIX/api" --since 1h --filter-pattern '"http_request_failed"'
+  '{ $.event = "outbox_dispatch_failed" || $.event = "worker_job_exhausted" || $.event = "outbox_reconcile_requeued" || $.event = "worker_error" || $.event = "outbox_dispatch_runner_failed" }'
+aws logs tail "/ecs/$NAME_PREFIX/api" --since 1h --filter-pattern '{ $.event = "http_request_failed" }'
 aws ecs describe-services --cluster "$CLUSTER" --services "$(tf_out api_service_name)" "$(tf_out worker_service_name)" \
   --query 'services[].{name: serviceName, running: runningCount, desired: desiredCount, events: events[:3].message}'
 aws ecs list-tasks --cluster "$CLUSTER" --desired-status STOPPED

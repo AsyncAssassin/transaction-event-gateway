@@ -118,6 +118,7 @@ Configuration is validated at startup. Use `.env.example` as the local template.
 | `RATE_LIMIT_TTL_SECONDS` | Rate limit window in seconds. Defaults to `60`. |
 | `RATE_LIMIT_LIMIT` | Max requests per window per observed request source as seen by Nest/Express. Local/direct deployments use the request IP. Behind ALB/proxy, this is not guaranteed to be the real end-client IP until explicit trust proxy / `X-Forwarded-For` handling is implemented. Defaults to `100`. |
 | `SWAGGER_ENABLED` | In `production`, serves Swagger/OpenAPI only when `true`. Non-production always serves it. Defaults to `false`. |
+| `LOG_FORMAT` | `json` for one JSON object per log line, `text` for Nest's colored console format. Defaults to `json` when `NODE_ENV=production`, otherwise `text`; Docker Compose sets `json`. |
 
 ## Local Run
 
@@ -340,7 +341,7 @@ Operational troubleshooting notes are in `docs/runbook.md`.
 
 ## Observability
 
-- Structured logs include correlation IDs, request metadata, safe entity identifiers, statuses, and error codes. 5xx responses and worker failures also log the error name, a safe cause code such as a SQLSTATE or errno, and the top stack frames, never the raw error message.
+- Logs are one JSON object per line in production and Docker Compose (`LOG_FORMAT=json`), with a timestamp, level, context, event name, correlation IDs, safe entity identifiers, statuses, and error codes; local development keeps Nest's text format. 5xx responses and worker failures also log the error name, a safe cause code such as a SQLSTATE or errno, and the top stack frames, never the raw error message.
 - `X-Correlation-ID` is accepted on inbound requests; missing values are generated and returned in responses.
 - `/health/live` reports process liveness; `/health/ready` checks configuration, PostgreSQL, and Redis. `/health/serving` excludes Redis for load balancer serving readiness.
 - Swagger UI and OpenAPI JSON are exposed at `/docs` and `/docs/openapi.json` for the implemented API surface.

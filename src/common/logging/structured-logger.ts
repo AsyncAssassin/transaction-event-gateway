@@ -44,6 +44,8 @@ const ALLOWED_LOG_FIELDS = new Set<StructuredLogField>([
 const MAX_LOG_STRING_LENGTH = 500;
 const SAFE_ERROR_CODE_PATTERN = /^[A-Z0-9_:-]{1,128}$/;
 
+// Events go to Nest's logger as plain objects; the application logger
+// (src/common/logging/app-logger.ts) prints them as JSON lines or as text.
 export class StructuredLogger {
   private readonly logger: Logger;
 
@@ -52,15 +54,15 @@ export class StructuredLogger {
   }
 
   info(event: string, fields: StructuredLogFields = {}): void {
-    this.logger.log(JSON.stringify(createStructuredLogEntry(event, fields)));
+    this.logger.log(createStructuredLogEntry(event, fields));
   }
 
   warn(event: string, fields: StructuredLogFields = {}): void {
-    this.logger.warn(JSON.stringify(createStructuredLogEntry(event, fields)));
+    this.logger.warn(createStructuredLogEntry(event, fields));
   }
 
   error(event: string, fields: StructuredLogFields = {}): void {
-    this.logger.error(JSON.stringify(createStructuredLogEntry(event, fields)));
+    this.logger.error(createStructuredLogEntry(event, fields));
   }
 }
 

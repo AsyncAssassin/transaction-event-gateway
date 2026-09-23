@@ -1,5 +1,6 @@
 locals {
   ecs_default_environment_variables = {
+    LOG_FORMAT                          = "json"
     NODE_ENV                            = "production"
     OUTBOX_DISPATCH_ENABLED             = "true"
     OUTBOX_DISPATCH_INTERVAL_MS         = "1000"
